@@ -273,14 +273,23 @@ class WebSocketEngine:
             # Combat event logging - track attacks and damage
             if event_type in ("agent_attacked", "combat", "attack", "damage_dealt"):
                 data = msg.get("data", {})
-                attacker = data.get("attackerName", data.get("attackerId", "?"))
-                target = data.get("targetName", data.get("targetId", "?"))
-                damage = data.get("damage", data.get("dmg", "?"))
-                weapon = data.get("weaponName", data.get("weaponType", "?"))
-                is_kill = data.get("isKill", data.get("killed", False))
-                kill_msg = " ☠️ KILL!" if is_kill else ""
-                log.info("⚔️ COMBAT: %s → %s | DMG: %s | Weapon: %s%s",
-                         attacker, target, damage, weapon, kill_msg)
+                # Try to find attacker/target in data or top-level
+                attacker = data.get("attackerName") or data.get("attackerId") or msg.get("attackerId") or "?"
+                target = data.get("targetName") or data.get("targetId") or msg.get("targetId") or "?"
+                damage = data.get("damage") or data.get("dmg") or msg.get("damage") or "?"
+                weapon = data.get("weaponName") or data.get("weaponType") or data.get("weaponId") or "?"
+                is_kill = data.get("isKill") or data.get("killed") or msg.get("isKill", False)
+
+                # Truncate IDs for readability if they are long
+                if len(attacker) > 16: attacker = f"ID:{attacker[:8]}"
+                if len(target) > 16: target = f"ID:{target[:8]}"
+
+                log.info("⚔️ COMBAT: %s → %s | DMG: %s | Weapon: %s%s", 
+                         attacker, target, damage, weapon, " (KILL!)" if is_kill else "")
+                
+                # If everything is still ?, log raw for debugging
+                if attacker == "?" and target == "?":
+                    log.debug("DEBUG_COMBAT_RAW: %s", str(msg)[:200])
 
         # ── waiting ───────────────────────────────────────────────────
         elif msg_type == "waiting":

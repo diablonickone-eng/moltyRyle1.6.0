@@ -214,6 +214,14 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         elif entry.get("id"):
             entry["regionId"] = entry.get("regionId", "")  # Ensure regionId exists
             visible_items.append(entry)  # Legacy flat format
+    # Map enemies to regions for movement scoring
+    enemy_region_count = {}
+    for a in visible_agents:
+        if isinstance(a, dict) and a.get("isAlive") and a.get("id") != self_data.get("id"):
+            rid = a.get("regionId")
+            if rid:
+                enemy_region_count[rid] = enemy_region_count.get(rid, 0) + 1
+
     # Scan loot in current region vs nearby regions
     items_here = [i for i in visible_items if i.get("regionId") == region.get("id", "")]
     items_nearby = [i for i in visible_items if i.get("regionId") != region.get("id", "") and i.get("regionId")]
@@ -221,9 +229,11 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     healing_here = [i for i in items_here if i.get("typeId", "").lower() in RECOVERY_ITEMS]
     currency_here = [i for i in items_here if i.get("typeId", "").lower() in ("rewards", "moltz")]
     
-    log.info("LOOT_SCAN: total_visible=%d | HERE=%d (wpn=%d heal=%d moltz=%d) | NEARBY=%d",
-             len(visible_items), len(items_here), len(weapons_here), len(healing_here), 
-             len(currency_here), len(items_nearby))
+    names_here = [i.get("typeId", i.get("name", "?")) for i in items_here]
+    names_nearby = [i.get("typeId", i.get("name", "?")) for i in items_nearby]
+    
+    log.info("LOOT_SCAN: total_visible=%d | HERE=%s | NEARBY=%s",
+             len(visible_items), names_here, names_nearby)
     
     # Inventory summary for monitoring
     inv_heals = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS])
@@ -244,12 +254,29 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     region_terrain = region.get("terrain", "").lower() if isinstance(region, dict) else ""
     region_weather = region.get("weather", "").lower() if isinstance(region, dict) else ""
 
+    # Combat/Aggression pre-calculations
+    enemies = [a for a in visible_agents if not a.get("isGuardian") and a.get("isAlive") and a.get("id") != self_data.get("id")]
+    enemies_here = [e for e in enemies if e.get("regionId") == region_id]
+    hp_threshold = _get_combat_hp_threshold(alive_count, equipped)
+    w_type = equipped.get("typeId", "").lower() if isinstance(equipped, dict) else ""
+    has_weapon = w_type in ("katana", "sniper", "sword", "pistol", "dagger", "bow")
+    healing_count = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS])
+    
+    # Aggression criteria: weapon + at least 1 healing item + decent HP
+    is_ready_for_war = has_weapon and healing_count >= 1 and hp >= 60
+    # FINISHER logic: If enemy is weak, we don't need "ready for war"
+    # Aggressive buff: if our HP is high (>80), we consider anyone < 50 HP as a finisher target
+    finisher_threshold = 50 if hp > 80 else 30
+    finisher_targets = [e for e in enemies if e.get("hp", 100) < finisher_threshold]
+    can_afford_combat = hp >= 40 or (hp >= hp_threshold and not is_ready_for_war)
+
     if not is_alive:
         return None  # Dead — wait for game_ended
 
     # Log current region state for debugging
     fac_types = [f.get("type","?") for f in interactables if isinstance(f, dict)]
-    log.info("REGION_STATE: %s | interactables=%s | terrain=%s | weather=%s",
+    log.info("REGION_STATE: %s (%s) | interactables=%s | terrain=%s | weather=%s",
+             region.get("name", "Unknown"),
              region_id[:8] if len(str(region_id)) > 8 else region_id,
              fac_types, region_terrain, region_weather)
 
@@ -361,19 +388,47 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if not can_act:
         return None
 
-    # (Death zone escape already handled above as Priority 1)
-
-    # ── Priority 3: Healing management ──────────────────────────────
+    # ── Priority 3: Critical healing ─────────────────────────────
+    # CRITICAL: If HP is low, healing is the ONLY priority.
     if hp < HP_CRITICAL_THRESHOLD:
         heal = _find_healing_item(inventory, critical=True)
         if heal:
             return {"action": "use_item", "data": {"itemId": heal["id"]},
                     "reason": f"CRITICAL HEAL: HP={hp}<{HP_CRITICAL_THRESHOLD}, using {heal.get('typeId', 'heal')}"}
+        
+        # EMERGENCY FLEE: If no healing items and HP is very low, RUN AWAY!
+        if hp < 25 and connections and enemies_here:
+            safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids]
+            if safe_conns:
+                # Prefer regions without enemies
+                best_escape = safe_conns[0]
+                for c in safe_conns:
+                    if enemy_region_count.get(_get_region_id(c), 0) == 0:
+                        best_escape = c
+                        break
+                rid = _get_region_id(best_escape)
+                log.warning("🚨 EMERGENCY FLEE: HP=%d and NO HEALS! Running to %s", hp, rid[:8])
+                return {"action": "move", "data": {"regionId": rid},
+                        "reason": f"ESCAPE: Low HP ({hp}) and no healing items!"}
+    
+    # ── Priority 4: Kill Finisher (Attack before Looting!) ─────────
+    # If there's a weak enemy in the SAME region, KILL them before they move or heal.
+    if finisher_targets and ep >= (COMBAT_MIN_EP + move_ep_cost) and can_afford_combat:
+        targets_here = [e for e in finisher_targets if e.get("regionId") == region_id]
+        if targets_here:
+            target = _select_weakest(targets_here)
+            if target:
+                return {"action": "attack",
+                        "data": {"targetId": target["id"], "targetType": "agent"},
+                        "reason": f"FINISHER: Killing weak target {target.get('name','?')} (HP={target.get('hp')}) before looting"}
+
+    # ── Priority 5: Free actions (pickup, equip) ─────────────────
+    # Moderate healing in safe area
     elif hp < HP_MODERATE_THRESHOLD and not enemies_here:
         heal = _find_healing_item(inventory, critical=False)
         if heal:
             return {"action": "use_item", "data": {"itemId": heal["id"]},
-                    "reason": f"HEAL: HP={hp}, safe area, using {heal.get('typeId', 'heal')}"}
+                    "reason": f"HEAL: HP={hp}, area safe, using {heal.get('typeId', 'heal')}"}
 
     # ── EP Conservation: save EP for DZ escape if pending DZ nearby ─
     dz_threatening = region_id in danger_ids or any(
@@ -381,7 +436,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     )
     ep_reserve = move_ep_cost if dz_threatening else 0
 
-    # ── Priority 4: EP recovery if EP low ─────────────────────────
+    # ── Priority 6: EP recovery if EP low ─────────────────────────
     # Energy drink (+5 EP) > rest (+1-2 EP). Use before falling back to rest.
     if ep <= 3:
         energy_drink = _find_energy_drink(inventory)
@@ -389,33 +444,51 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
                     "reason": f"EP RECOVERY: EP={ep}, using energy drink (+5 EP)"}
 
-    # ── Priority 5: Smart Agent Combat (Kill Hunting) ──────────────
-    # "Predator Cerdas" logic: Only hunt if we have weapon + healing resources.
-    has_good_weapon = equipped and equipped.get("typeId", "").lower() in ("katana", "sniper", "sword", "pistol")
-    healing_count = len([i for i in inventory if i.get("typeId", "").lower() in ("medkit", "bandage", "emergency_food")])
-    
-    # Aggression criteria: good weapon + at least 1 healing item + decent HP
-    is_ready_for_war = has_good_weapon and healing_count >= 1 and hp >= 60
-    
-    hp_threshold = _get_combat_hp_threshold(alive_count, equipped)
+    # ── Priority 7: Smart Agent Combat (Kill Hunting) ──────────────
+    # "Predator Cerdas" logic: Only hunt if we can afford it
     weather_ok = region_weather not in ("storm", "fog") or get_weapon_range(equipped) >= 1
     ep_budget = COMBAT_MIN_EP + move_ep_cost + ep_reserve
     
-    if enemies and ep >= ep_budget and (hp >= hp_threshold or is_ready_for_war) and weather_ok:
+    if enemies and ep >= ep_budget and can_afford_combat and weather_ok:
         target = _select_best_target(
             enemies, atk, equipped, defense, region_weather,
             my_hp=hp, alive_count=alive_count
         )
         if target:
-            # Special logic for Predator mode: if we are ready for war, be more persistent
             w_range = get_weapon_range(equipped)
+            in_same_region = target["agent"].get("regionId") == region_id
+            should_kite = target.get("should_kite", False)
+
+            # RANGED KITE: If we have range and enemy is too close, MOVE away first
+            if w_range >= 1 and in_same_region and connections and should_kite:
+                safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids]
+                if safe_conns:
+                    # Escape to region with fewest enemies
+                    best_escape = safe_conns[0]
+                    for c in safe_conns:
+                        if enemy_region_count.get(_get_region_id(c), 0) == 0:
+                            best_escape = c
+                            break
+                    rid = _get_region_id(best_escape)
+                    return {"action": "move", "data": {"regionId": rid},
+                            "reason": f"KITE: Repositioning for {equipped.get('typeId')} range advantage"}
+
+            # Standard attack if in range
             if _is_in_range(target["agent"], region_id, w_range, connections):
                 return {"action": "attack",
                         "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
                         "reason": f"PREDATOR: Hunting {target['agent'].get('name','?')} "
                                   f"(Weapon={equipped.get('typeId')} Heal={healing_count})"}
+            
+            # CHASE MODE: If enemy is nearby but out of range, move toward them
+            enemy_rid = target["agent"].get("regionId")
+            if (is_ready_for_war or target["agent"].get("hp", 100) < 30) and enemy_rid and enemy_rid != region_id:
+                # Check if this region is one of our connections
+                if any(_get_region_id(c) == enemy_rid for c in connections):
+                    return {"action": "move", "data": {"regionId": enemy_rid},
+                            "reason": f"CHASE: Hunting {target['agent'].get('name','?')} in {enemy_rid[:8]}"}
                 
-    # ── Priority 6: Guardian farming (120 sMoltz per kill!) ────────
+    # ── Priority 8: Guardian farming (120 sMoltz per kill!) ────────
     # Only farm if: HP is safe + we can win the fight + EP budget for chase
     guardians = [a for a in visible_agents
                  if a.get("isGuardian", False) and a.get("isAlive", True)]
@@ -487,7 +560,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         move_target = _choose_move_target(connections, danger_ids,
                                            region, visible_items, alive_count,
                                            visible_agents, self_data.get("id", ""), hp, ep,
-                                           visible_regions, equipped)
+                                           visible_regions, equipped, inventory)
         if move_target:
             return {"action": "move", "data": {"regionId": move_target},
                     "reason": "EXPLORE: Moving to better position"}
@@ -1168,7 +1241,8 @@ def _choose_move_target(connections, danger_ids: set,
                          my_id: str = "", my_hp: int = 100,
                          ep: int = 10,
                          visible_regions: list = None,
-                         equipped = None) -> str | None:
+                         equipped = None,
+                         inventory: list = None) -> str | None:
     """Choose best region to move to.
     CRITICAL: NEVER move into a death zone or pending death zone!
     Enhanced: avoid regions with many enemies when HP is low.
@@ -1319,25 +1393,53 @@ def _choose_move_target(connections, danger_ids: set,
             if alive_count < 30:
                 score += 3
 
-            # ENEMY AVOIDANCE: penalize regions with enemies when HP is low
+            # ENEMY AVOIDANCE / ATTRACTION
             enemy_count = enemy_region_count.get(rid, 0)
+            
+            # Define hunter readiness in this scope
+            w_type = equipped.get("typeId", "").lower() if isinstance(equipped, dict) else ""
+            has_weapon = w_type in ("katana", "sniper", "sword", "pistol", "dagger", "bow")
+            healing_count = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS]) if inventory else 0
+            is_ready_for_war = has_weapon and healing_count >= 1 and my_hp >= 60
+
+            # SCOUT MODE: Hills provide +2 vision range (strategic advantage)
+            if terrain == "hills":
+                score += 12
+                # Extra bonus if we are looking for loot or need to track DZ
+                if len(visible_items) < 5:
+                    score += 8
+                    log.debug("SCOUT_MODE: Favoring hills for better vision (current visible items low)")
+
+            # WEAPON SPECIALIZATION: Prefer terrain that suits the weapon
+            if has_weapon:
+                if w_type == "sniper":
+                    if terrain == "hills": score += 15  # Snipers love high ground for vision
+                    elif terrain == "plains": score -= 5 # Too exposed for a sniper
+                elif w_type in ("katana", "sword"):
+                    if terrain in ("forest", "ruins"): score += 10  # Ambush / Close quarters
+                    elif terrain == "plains": score -= 5 # Easy to spot from distance
+                elif w_type == "pistol":
+                    if terrain == "ruins": score += 7 # Cover for tactical shooting
+
             if enemy_count > 0:
                 if my_hp < 40:
-                    score -= enemy_count * 10  # Stronger avoidance when low HP
+                    score -= enemy_count * 15  # Avoid if low HP
+                elif is_ready_for_war:
+                    score += enemy_count * 20  # STRONG attraction for hunters!
                 elif AGGRESSION_LEVEL == "aggressive":
-                    score += enemy_count * 2
+                    score += enemy_count * 5
                 else:
-                    score -= enemy_count * 3
+                    score -= enemy_count * 5
 
             # TERRAIN ADVANTAGE: hills = vision +2 = scouting advantage
             if terrain == "hills":
                 score += 3
 
-            # VISITED REGION PENALTY: prefer unexplored regions (extremely strong penalty)
+            # VISITED REGION PENALTY: encourage long-range exploration
             if rid in _visited_regions:
-                score -= 40
+                score -= 60  # Even harsher penalty for backtracking
             else:
-                score += 15
+                score += 40  # Massive bonus for "New Frontiers"
 
             # GUARDIAN HUNTING: bonus for regions with known guardians
             if rid in _guardian_locations:
@@ -1362,21 +1464,38 @@ def _choose_move_target(connections, danger_ids: set,
                 elif w_range >= 1 and any(enemy_region_count.get(adj, 0) > 0 for adj in _get_adjacent_ids(conn, visible_regions)):
                     score += 5  # Bonus for staying at range
             
-            candidates.append((rid, score))
+            # ENEMY SCAN: Detailed intel for the log
+            enemy_intel = []
+            if enemy_count > 0:
+                for e in enemies:
+                    if e.get("regionId") == rid:
+                        e_hp = e.get("hp", "?")
+                        e_wpn = e.get("equippedWeapon", {}).get("typeId", "fist") if isinstance(e.get("equippedWeapon"), dict) else "fist"
+                        enemy_intel.append(f"HP:{e_hp}/W:{e_wpn}")
+
+            candidates.append({
+                "id": rid,
+                "name": resolved.get("name", "Unknown"),
+                "score": score,
+                "enemies": enemy_count,
+                "intel": enemy_intel,
+                "is_new": rid not in _visited_regions
+            })
 
     if not candidates:
         log.debug("MOVE: No valid candidates from %d connections", len(connections))
         return None
 
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    best = candidates[0]
-    log.info("MOVE: %d visible items (with regionId), scores=%s | candidates=%s | picked=%s (score=%d)",
-             items_with_rid,
-             {k: v for k, v in item_region_scores.items() if v > 0},
-             [(c[0][:8] if len(c[0]) > 8 else c[0], round(c[1], 1)) for c in candidates[:4]],
-             best[0][:8] if len(best[0]) > 8 else best[0],
-             round(best[1], 1))
-    return best[0]
+    # Sort and Log Radar
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    radar_summary = []
+    for c in candidates[:3]:
+        new_tag = "[NEW]" if c["is_new"] else ""
+        intel_tag = f" | Intel:{c['intel']}" if c["intel"] else ""
+        radar_summary.append(f"{c['name']} ({c['score']}pts){new_tag}{intel_tag}")
+    
+    log.info("MOVE_RADAR: Top candidates: %s", " || ".join(radar_summary))
+    return candidates[0]["id"]
 
 """
 View fields from api-summary.md (all implemented above — v1.5.2):
