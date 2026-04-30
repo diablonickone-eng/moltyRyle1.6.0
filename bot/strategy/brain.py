@@ -522,7 +522,14 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     "reason": f"RANGED: Shooting {target['agent'].get('name','?')} "
                               f"(HP={target['agent'].get('hp','?')} W={w_type})"}
         else:
-            log.warning("FAST_PATH_B_REJECTED: _select_best_target returned None for %d enemies", len(enemies_in_range))
+            # RANGED PRIORITY: Attack weakest enemy anyway due to range advantage
+            # Enemy in adjacent cannot melee counter-attack, so we have advantage
+            log.info("🏹 RANGED_PRIORITY: No 'acceptable' target, but attacking weakest due to range advantage")
+            weakest = _select_weakest(enemies_in_range)
+            if weakest:
+                return {"action": "attack",
+                        "data": {"targetId": weakest["id"], "targetType": "agent"},
+                        "reason": f"RANGED_PRIORITY: Attacking weakest {weakest.get('name','?')} (HP={weakest.get('hp','?')}) with {w_type} range advantage"}
 
     # PATH C: General scan — target any visible enemy if in range
     if enemies and ep >= ep_budget and can_afford_combat and weather_ok:
