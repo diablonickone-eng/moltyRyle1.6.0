@@ -452,6 +452,18 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 return {"action": "attack",
                         "data": {"targetId": target["id"], "targetType": "agent"},
                         "reason": f"FINISHER: Killing weak target {target.get('name','?')} (HP={target.get('hp')}) before looting"}
+        
+        # RANGED FINISHER: Kill weak enemies in adjacent regions (Bow/Pistol/Sniper)
+        if w_range >= 1 and enemies_in_range:
+            finishers_in_range = [e for e in finisher_targets if e in enemies_in_range]
+            if finishers_in_range:
+                target = _select_weakest(finishers_in_range)
+                if target:
+                    log.info("🏹 RANGED_FINISHER: Killing weak %s in adjacent region (HP=%s)",
+                             target.get("name", "?"), target.get("hp", "?"))
+                    return {"action": "attack",
+                            "data": {"targetId": target["id"], "targetType": "agent"},
+                            "reason": f"RANGED FINISHER: Killing weak {target.get('name','?')} (HP={target.get('hp')}) with {w_type}"}
 
     # ── Priority 5: Free actions (pickup, equip) ─────────────────
     # Moderate healing in safe area
@@ -1449,9 +1461,15 @@ def _choose_move_target(connections, danger_ids: set,
                 elif terrain == "plains": score -= 5 
 
             # 4. ENEMY ATTRACTION (Hunter / Steal Kill Logic)
+            # HARD BLOCK: Never move into high enemy zones if not ready for war
+            MAX_SAFE_ENEMIES = 3 if is_ready_for_war else 1
+            if enemy_count > MAX_SAFE_ENEMIES and not is_ready_for_war and my_hp < 60:
+                log.warning("🚫 SCAN: %s has %d enemies, not safe! Skipping.", resolved.get("name", rid)[:8], enemy_count)
+                continue  # Skip this region entirely
+            
             if enemy_count > 0:
                 if my_hp < 40:
-                    score -= enemy_count * 20
+                    score -= enemy_count * 30  # Increased penalty
                 elif is_ready_for_war:
                     score += enemy_count * 25
                     if enemy_count >= 2:
@@ -1460,7 +1478,7 @@ def _choose_move_target(connections, danger_ids: set,
                 elif AGGRESSION_LEVEL == "aggressive":
                     score += enemy_count * 10
                 else:
-                    score -= enemy_count * 5
+                    score -= enemy_count * 15  # Stronger penalty for unknown danger
 
             # 5. EXPLORATION vs BACKTRACKING
             if rid in _visited_regions:
