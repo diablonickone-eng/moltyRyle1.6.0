@@ -372,10 +372,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if equip_action:
         return equip_action
     
-    # Drop worst item if inventory full and better item available
-    drop_action = _check_drop_for_upgrade(inventory, visible_items, equipped)
-    if drop_action:
-        return drop_action
 
     # Use utility items: Map (reveal map), Megaphone (broadcast)
     util_action = _use_utility_item(inventory, hp, ep, alive_count)
@@ -446,7 +442,21 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # "Predator Cerdas" logic: Only hunt if we can afford it
     weather_ok = region_weather not in ("storm", "fog") or get_weapon_range(equipped) >= 1
     ep_budget = COMBAT_MIN_EP + move_ep_cost + ep_reserve
-    
+
+    # FAST PATH: Enemies in the SAME region — attack immediately!
+    if enemies_here and ep >= COMBAT_MIN_EP and can_afford_combat and weather_ok:
+        target = _select_best_target(
+            enemies_here, atk, equipped, defense, region_weather,
+            my_hp=hp, alive_count=alive_count
+        )
+        if target:
+            log.info("⚔️ SAME_REGION_ATTACK: %d enemies here — targeting %s (HP=%s)",
+                     len(enemies_here), target["agent"].get("name", "?"), target["agent"].get("hp", "?"))
+            return {"action": "attack",
+                    "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
+                    "reason": f"PREDATOR: Attacking {target['agent'].get('name','?')} "
+                              f"(HP={target['agent'].get('hp','?')} Weapon={w_type or 'fist'})"}
+
     if enemies and ep >= ep_budget and can_afford_combat and weather_ok:
         target = _select_best_target(
             enemies, atk, equipped, defense, region_weather,
