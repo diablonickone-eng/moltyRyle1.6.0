@@ -7,6 +7,10 @@ from bot.config import LOG_LEVEL
 def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
         handler = logging.StreamHandler(sys.stdout)
         fmt = logging.Formatter(
             "[%(asctime)s] %(levelname)-7s %(name)-25s | %(message)s",

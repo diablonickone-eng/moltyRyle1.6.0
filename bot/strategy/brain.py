@@ -28,6 +28,7 @@ from bot.config import (
     AGGRESSION_LEVEL, HP_CRITICAL_THRESHOLD, HP_MODERATE_THRESHOLD,
     GUARDIAN_FARM_MIN_HP, COMBAT_MIN_EP,
 )
+from bot.learning.strategy_dna import get_dna
 
 log = get_logger(__name__)
 
@@ -361,14 +362,21 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     else:
         enemies_in_range = []
 
-    hp_threshold = _get_combat_hp_threshold(alive_count, equipped)
-
+    # ── SELF-LEARNING: Load evolved DNA parameters ──────────────
+    dna = get_dna()
+    game_phase = "early" if alive_count > 70 else ("mid" if alive_count > 25 else "late")
+    strategy = dna.get_strategy_params(game_phase, hp, alive_count)
+    
+    log.info("🧬 DNA_STRATEGY: phase=%s | aggression=%.2f | finisher_threshold=%d | war_ready_hp=%d",
+             game_phase, strategy["aggression"], strategy["finisher_threshold"], 
+             strategy["ready_for_war_hp"])
+    
     # Aggression criteria: weapon + at least 1 healing item + decent HP
-    # AGGRESSIVE: Lower HP threshold to engage more fights
-    is_ready_for_war = has_weapon and healing_count >= 1 and hp >= 45  # Lowered from 60
+    # Using LEARNED DNA parameters instead of static values!
+    is_ready_for_war = has_weapon and healing_count >= 1 and hp >= strategy["ready_for_war_hp"]
     # FINISHER logic: If enemy is weak, we don't need "ready for war"
-    # AGGRESSIVE: Lower finisher threshold to hunt more weak enemies
-    finisher_threshold = 60 if hp > 70 else 40  # Lowered from 50/30 to 60/40
+    # Using LEARNED finisher threshold
+    finisher_threshold = strategy["finisher_threshold"]
     finisher_targets = [e for e in enemies if e.get("hp", 100) < finisher_threshold]
 
     # Log enemy scan for debugging — critical to trace why attack isn't firing
@@ -376,8 +384,12 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
              len(enemies), len(enemies_here), len(enemies_in_range), len(finisher_targets),
              is_ready_for_war, w_type or "fist")
 
-    # AGGRESSIVE: Lower minimum HP to enter combat (was 40)
-    can_afford_combat = hp >= 25 or (hp >= hp_threshold and is_ready_for_war)
+    # Survival gate: do not let old/overfit DNA make the bot fight at reckless HP.
+    phase_floor = 35 if alive_count <= 10 else (45 if alive_count <= 25 else 50)
+    combat_hp_floor = max(strategy["combat_hp_threshold"], phase_floor)
+    can_afford_combat = hp >= combat_hp_floor or (
+        hp >= _get_combat_hp_threshold(alive_count, equipped) and is_ready_for_war
+    )
 
     if not is_alive:
         return None  # Dead — wait for game_ended
@@ -385,6 +397,8 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # Log current region state for debugging
     fac_types = [f.get("type",f.get("typeId","?")) for f in interactables if isinstance(f, dict)]
     enemies_here_names = [e.get("name", e.get("id","?")[:8]) for e in enemies_here]
+    log.info("COMBAT_GATE: hp=%d floor=%d phase_floor=%d can_afford=%s",
+             hp, combat_hp_floor, phase_floor, can_afford_combat)
     log.info("REGION_STATE: %s (%s) | terrain=%s | weather=%s | interactables=%s | enemies_here=%s",
              region.get("name", "Unknown"),
              region_id[:8] if len(str(region_id)) > 8 else region_id,
@@ -680,7 +694,12 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # Only farm if: HP is safe + we can win the fight + EP budget for chase
     guardians = [a for a in visible_agents
                  if a.get("isGuardian", False) and a.get("isAlive", True)]
-    if guardians and hp >= GUARDIAN_FARM_MIN_HP:
+    guardian_weapon_ok = w_type in ("katana", "sniper", "sword", "pistol")
+    guardian_heal_ok = healing_count >= 1 or hp >= 75
+    nearby_players = len(enemies_here) + len(enemies_in_range)
+    guardian_weather_ok = region_weather not in ("storm", "fog") or w_range >= 1
+    if (guardians and hp >= max(GUARDIAN_FARM_MIN_HP, 60) and guardian_weapon_ok
+            and guardian_heal_ok and nearby_players == 0 and guardian_weather_ok):
         # EP budget: combat EP + move EP for potential chase
         ep_budget = COMBAT_MIN_EP + move_ep_cost + ep_reserve
         if ep >= ep_budget:
@@ -694,6 +713,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                             "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
                             "reason": f"GUARDIAN FARM: HP={target['agent'].get('hp','?')} "
                                       f"(120 sMoltz! dmg={target['my_dmg']} vs {target['enemy_dmg']})"}
+    elif guardians:
+        log.info("GUARDIAN_SKIP: hp=%d weapon_ok=%s heal_ok=%s nearby_players=%d weather_ok=%s",
+                 hp, guardian_weapon_ok, guardian_heal_ok, nearby_players, guardian_weather_ok)
 
     # ── Priority 7: Monster farming (only when EP is abundant) ────
     monsters = [m for m in visible_monsters if m.get("hp", 0) > 0]
@@ -1408,6 +1430,9 @@ def _choose_move_target(connections, danger_ids: set,
     has_weapon = w_type in ("katana", "sniper", "sword", "pistol", "dagger", "bow")
     healing_count = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS]) if inventory else 0
     is_ready_for_war = has_weapon and healing_count >= 1 and my_hp >= 60
+    is_late_game = alive_count <= 25
+    visited_penalty = 20 if is_late_game else 60
+    new_region_bonus = 20 if is_late_game else 45
 
     # Build region item attractiveness scores
     item_region_scores = {}
@@ -1505,9 +1530,9 @@ def _choose_move_target(connections, danger_ids: set,
             # VISITED REGION PENALTY
             is_new = conn not in _visited_regions
             if not is_new:
-                score -= 60
+                score -= visited_penalty
             else:
-                score += 45
+                score += new_region_bonus
 
             candidates.append({
                 "id": conn,
@@ -1586,9 +1611,9 @@ def _choose_move_target(connections, danger_ids: set,
 
             # 5. EXPLORATION vs BACKTRACKING
             if rid in _visited_regions:
-                score -= 60
+                score -= visited_penalty
             else:
-                score += 45
+                score += new_region_bonus
 
             # 6. GUARDIAN HUNTING
             if rid in _guardian_locations: score += 15

@@ -19,6 +19,7 @@ from bot.credentials import get_api_key
 from bot.game.action_sender import ActionSender, COOLDOWN_ACTIONS, FREE_ACTIONS
 from bot.strategy.brain import decide_action, reset_game_state, learn_from_map
 from bot.dashboard.state import dashboard_state
+from bot.learning import record_match
 from bot.utils.rate_limiter import ws_limiter
 from bot.utils.logger import get_logger
 
@@ -78,6 +79,14 @@ class WebSocketEngine:
         self.dashboard_name = "Agent"
         self._existing_ws = None  # Socket from unified join (v1.6.0)
         self.last_sent_action = None  # {type, itemId, targetId}
+        # Game stats tracking for self-learning
+        self._game_stats = {
+            "start_time": None,
+            "kills": 0,
+            "damage_dealt": 0,
+            "damage_taken": 0,
+            "moltz": 0,
+        }
 
     async def run(self, existing_ws=None) -> dict:
         """
@@ -187,6 +196,13 @@ class WebSocketEngine:
                 hp = view.get("self", {}).get("hp", "?")
                 ep = view.get("self", {}).get("ep", "?")
                 log.info("agent_view (reason=%s) alive=%s HP=%s EP=%s", reason, alive, hp, ep)
+                # Track game stats for self-learning
+                if self._game_stats["start_time"] is None:
+                    self._game_stats["start_time"] = time.time()
+                    # Reset stats for new game
+                    self_data = view.get("self", {})
+                    self._game_stats["kills"] = self_data.get("kills", 0)
+                    self._game_stats["moltz"] = self_data.get("moltz", 0)
                 # DEBUG: log first visible agent to confirm API fields (HP, EP, equippedWeapon)
                 va = view.get("visibleAgents", [])
                 if va and isinstance(va[0], dict):
@@ -261,6 +277,41 @@ class WebSocketEngine:
         # ── game_ended ────────────────────────────────────────────────
         elif msg_type == "game_ended":
             log.info("=== GAME ENDED ===")
+            # Record match for self-learning evolution
+            try:
+                end_time = time.time()
+                survival_time = int(end_time - self._game_stats["start_time"]) if self._game_stats["start_time"] else 0
+                data = msg.get("data", {}) if isinstance(msg.get("data", {}), dict) else {}
+                result = msg.get("result", {}) if isinstance(msg.get("result", {}), dict) else {}
+                self_data = data.get("self") or result.get("self") or msg.get("self") or {}
+                if not isinstance(self_data, dict):
+                    self_data = {}
+                placement = (
+                    self_data.get("placement")
+                    or self_data.get("finalRank")
+                    or data.get("placement")
+                    or data.get("finalRank")
+                    or result.get("placement")
+                    or result.get("finalRank")
+                    or 100
+                )
+                kills = (
+                    self_data.get("kills")
+                    or data.get("kills")
+                    or result.get("kills")
+                    or self._game_stats["kills"]
+                )
+                record_match(
+                    placement=placement,
+                    kills=kills,
+                    survival_time=survival_time,
+                    damage_dealt=self_data.get("damageDealt", result.get("damageDealt", self._game_stats["damage_dealt"])),
+                    damage_taken=self_data.get("damageTaken", result.get("damageTaken", self._game_stats["damage_taken"])),
+                    moltz=self_data.get("moltz", result.get("moltz", self._game_stats["moltz"]))
+                )
+                log.info("🧬 MATCH RECORDED for evolution | Survived: %ds", survival_time)
+            except Exception as e:
+                log.warning("Failed to record match: %s", e)
             reset_game_state()  # Clear curse tracking for next game
             self.game_result = msg
             return msg
@@ -286,6 +337,22 @@ class WebSocketEngine:
 
                 log.info("⚔️ COMBAT: %s → %s | DMG: %s | Weapon: %s%s", 
                          attacker, target, damage, weapon, " (KILL!)" if is_kill else "")
+                
+                # Track damage for self-learning stats
+                try:
+                    dmg_val = int(damage) if isinstance(damage, (int, float, str)) and damage != "?" else 0
+                    is_me = self.dashboard_key in attacker or self.agent_id in attacker
+                    is_target_me = self.dashboard_key in target or self.agent_id in target
+                    
+                    if is_me and dmg_val > 0:
+                        self._game_stats["damage_dealt"] += dmg_val
+                    if is_target_me and dmg_val > 0:
+                        self._game_stats["damage_taken"] += dmg_val
+                    if is_me and is_kill:
+                        self._game_stats["kills"] += 1
+                        log.info("🎯 KILL TRACKED! Total kills this game: %d", self._game_stats["kills"])
+                except Exception as e:
+                    log.debug("Failed to track combat stats: %s", e)
                 
                 # If everything is still ?, log raw for debugging
                 if attacker == "?" and target == "?":

@@ -1,0 +1,31 @@
+[
+  {
+    "timestamp": "2026-05-01T01:26:56.608546",
+    "generation": 0,
+    "placement": 100,
+    "kills": 0,
+    "survival_time": 186,
+    "damage_dealt": 0,
+    "damage_taken": 0,
+    "moltz_earned": 0,
+    "dna_snapshot": {
+      "combat_hp_threshold": 25,
+      "finisher_threshold_early": 40,
+      "finisher_threshold_late": 60,
+      "ready_for_war_hp": 45,
+      "aggression_early": 0.3,
+      "aggression_mid": 0.6,
+      "aggression_late": 0.9,
+      "weapon_priority_boost": 100,
+      "heal_stockpile_target": 4,
+      "currency_priority": 300,
+      "exploration_weight": 10,
+      "enemy_avoidance_weight": 20,
+      "loot_proximity_weight": 15,
+      "hunting_weight": 50,
+      "max_enemies_safe": 2,
+      "danger_flee_hp": 30,
+      "chase_threshold_hp": 50
+    }
+  }
+]

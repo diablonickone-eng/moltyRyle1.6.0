@@ -38,6 +38,7 @@ function itemTag(i) {
 
 // ─── State ───
 let S = { agents:{}, stats:{}, logs:[], agent_logs:{}, accounts:[] };
+let L = null;
 let currentPage = 'dashboard', currentLogTab = 'all';
 let prevAgentHash = '';
 
@@ -77,6 +78,7 @@ function render() {
   try { renderAgentCards(); } catch(e) {}
   try { renderAgentsTable(); } catch(e) {}
   try { renderDataTable(); } catch(e) {}
+  try { renderLearning(); } catch(e) {}
   try { renderLogs(); } catch(e) {}
 }
 
@@ -286,6 +288,80 @@ function renderDataTable() {
   ).join('');
 }
 
+// Learning dashboard
+function refreshLearning() {
+  fetch('/api/learning')
+    .then(r => r.json())
+    .then(d => { L = d; renderLearning(); })
+    .catch(() => {});
+}
+
+function renderLearning() {
+  if (!$('learning-dna') || !L) return;
+  const dna = L.dna || {};
+  const summary = L.summary || {};
+  const recent = L.recent || [];
+  const recs = L.recommendations || [];
+
+  setText('learning-dna-note', L.dna_saved
+    ? 'DNA tersimpan dari hasil learning bot.'
+    : 'Belum ada DNA tersimpan. Ini masih pakai default strategy DNA sampai match berikutnya tercatat.');
+
+  const dnaKeys = [
+    ['combat_hp_threshold', 'Combat HP'],
+    ['ready_for_war_hp', 'War HP'],
+    ['danger_flee_hp', 'Flee HP'],
+    ['finisher_threshold_early', 'Finisher Early'],
+    ['finisher_threshold_late', 'Finisher Late'],
+    ['aggression_early', 'Agg Early'],
+    ['aggression_mid', 'Agg Mid'],
+    ['aggression_late', 'Agg Late'],
+    ['max_enemies_safe', 'Max Enemies'],
+    ['chase_threshold_hp', 'Chase HP'],
+  ];
+  $('learning-dna').innerHTML = dnaKeys.map(([key, label]) => {
+    const val = dna[key] ?? '-';
+    const pct = typeof val === 'number' ? Math.max(4, Math.min(100, key.includes('aggression') ? val * 100 : val)) : 0;
+    return `<div class="dna-item">
+      <div class="dna-head"><span>${esc(label)}</span><b>${esc(val)}</b></div>
+      <div class="dna-bar"><span style="width:${pct}%"></span></div>
+    </div>`;
+  }).join('');
+
+  $('learning-summary').innerHTML = [
+    ['Matches', summary.total_matches || 0],
+    ['Wins', summary.wins || 0],
+    ['Top 10', summary.top10 || 0],
+    ['Avg Place', summary.avg_placement || 0],
+    ['Avg Kills', summary.avg_kills || 0],
+    ['Avg Survival', (summary.avg_survival || 0) + 's'],
+    ['Total Kills', summary.total_kills || 0],
+    ['Total Damage', summary.total_damage || 0],
+  ].map(([label, value]) => `<div class="learning-stat"><div class="v">${esc(value)}</div><div class="l">${esc(label)}</div></div>`).join('');
+
+  const tb = $('learning-recent');
+  if (!recent.length) {
+    tb.innerHTML = '<tr><td colspan="6" style="color:var(--text2);text-align:center">No match history</td></tr>';
+  } else {
+    tb.innerHTML = recent.map(m => {
+      const place = m.placement || 100;
+      const statusClass = place === 1 ? 'ok' : place <= 10 ? 'warn' : place > 50 ? 'err' : 'ok';
+      return `<tr>
+        <td>${esc(m.timestamp || '-')}</td>
+        <td><span class="badge ${statusClass}">#${esc(place)}</span></td>
+        <td>${esc(m.kills || 0)}</td>
+        <td>${esc(m.survival_time || 0)}s</td>
+        <td>${esc(m.damage_dealt || 0)}</td>
+        <td>${esc(m.fitness || 0)}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  $('learning-recs').innerHTML = recs.length
+    ? recs.map(r => `<div class="rec-line">${esc(r)}</div>`).join('')
+    : '<div class="rec-line">Belum ada rekomendasi.</div>';
+}
+
 // ─── Logs (always render — no skip) ───
 function renderLogs() {
   const logs = currentLogTab === 'all' ? (S.logs||[]) : ((S.agent_logs||{})[currentLogTab]||[]);
@@ -359,6 +435,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 2. Connect WebSocket for realtime updates
   connectWS();
+  refreshLearning();
+  setInterval(refreshLearning, 10000);
 
   // 3. Safety: force render after 2s in case of race condition
   setTimeout(() => { render(); }, 2000);

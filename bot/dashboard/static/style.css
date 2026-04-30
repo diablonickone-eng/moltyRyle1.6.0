@@ -104,6 +104,23 @@ a{color:var(--cyan);text-decoration:none}
 .btn-outline:hover{border-color:var(--cyan);color:var(--cyan)}
 .form-row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 
+/* Learning Dashboard */
+.learning-top{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:16px}
+.learning-card{margin-bottom:16px}
+.learning-note{color:var(--text2);font-size:12px;margin-bottom:12px;line-height:1.5}
+.dna-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.dna-item{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px}
+.dna-head{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:var(--text2);margin-bottom:8px}
+.dna-head b{color:var(--cyan);font-size:13px}
+.dna-bar{height:7px;background:var(--bg);border-radius:6px;overflow:hidden}
+.dna-bar span{display:block;height:100%;border-radius:6px;background:linear-gradient(90deg,var(--cyan),var(--green))}
+.learning-summary{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.learning-stat{text-align:center;padding:12px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:8px}
+.learning-stat .v{font-size:18px;font-weight:700;color:var(--amber);font-family:'Syne',sans-serif}
+.learning-stat .l{font-size:10px;color:var(--text2);margin-top:4px;text-transform:uppercase}
+.learning-recs{display:grid;gap:8px}
+.rec-line{background:var(--surface2);border-left:3px solid var(--cyan);border-radius:6px;padding:10px 12px;color:var(--text);line-height:1.5}
+
 @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes spinSlow{from{transform:rotate(0)}to{transform:rotate(360deg)}}
@@ -142,4 +159,4 @@ a{color:var(--cyan);text-decoration:none}
 ::-webkit-scrollbar-thumb:hover{background:var(--text2)}
 
 @media(max-width:1100px){.agent-grid{grid-template-columns:1fr}.info-grid{grid-template-columns:1fr 1fr}.combat-row{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:768px){.sidebar{width:60px;overflow:hidden}.sidebar .nav-text,.sidebar .logo span{display:none}.sidebar .logo h2{font-size:12px}.main{margin-left:60px}.header{padding:12px 16px}.content{padding:16px}.form-row{grid-template-columns:1fr}.agent-stats{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:768px){.sidebar{width:60px;overflow:hidden}.sidebar .nav-text,.sidebar .logo span{display:none}.sidebar .logo h2{font-size:12px}.main{margin-left:60px}.header{padding:12px 16px}.content{padding:16px}.form-row{grid-template-columns:1fr}.agent-stats{grid-template-columns:repeat(2,1fr)}.learning-top,.dna-grid,.learning-summary{grid-template-columns:1fr}}
