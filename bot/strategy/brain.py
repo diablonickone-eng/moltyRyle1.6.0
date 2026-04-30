@@ -268,17 +268,18 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # Aggressive buff: if our HP is high (>80), we consider anyone < 50 HP as a finisher target
     finisher_threshold = 50 if hp > 80 else 30
     finisher_targets = [e for e in enemies if e.get("hp", 100) < finisher_threshold]
-    can_afford_combat = hp >= 40 or (hp >= hp_threshold and not is_ready_for_war)
+    can_afford_combat = hp >= 40 or (hp >= hp_threshold and is_ready_for_war)
 
     if not is_alive:
         return None  # Dead — wait for game_ended
 
     # Log current region state for debugging
-    fac_types = [f.get("type","?") for f in interactables if isinstance(f, dict)]
-    log.info("REGION_STATE: %s (%s) | interactables=%s | terrain=%s | weather=%s",
+    fac_types = [f.get("type",f.get("typeId","?")) for f in interactables if isinstance(f, dict)]
+    enemies_here_names = [e.get("name", e.get("id","?")[:8]) for e in enemies_here]
+    log.info("REGION_STATE: %s (%s) | terrain=%s | weather=%s | interactables=%s | enemies_here=%s",
              region.get("name", "Unknown"),
              region_id[:8] if len(str(region_id)) > 8 else region_id,
-             fac_types, region_terrain, region_weather)
+             region_terrain, region_weather, fac_types, enemies_here_names)
 
     # ── Build FULL danger map (DZ + pending DZ) ───────────────────
     # Used by ALL movement decisions to NEVER move into danger.
@@ -331,10 +332,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # (was: _check_curse → whisper answer to guardian)
 
     # ── Priority 2b: Threat evasion (guardians + strong enemies) ───
-    # Build enemies list early (needed for multiple checks below)
-    enemies = [a for a in visible_agents
-               if not a.get("isGuardian", False) and a.get("isAlive", True)
-               and a.get("id") != self_data.get("id")]
+    # Enemies list already pre-calculated at start of function
     guardians_here = [a for a in visible_agents
                       if a.get("isGuardian", False) and a.get("isAlive", True)
                       and a.get("regionId") == region_id]
@@ -611,10 +609,18 @@ def _estimate_enemy_weapon_bonus(agent: dict) -> int:
     return WEAPONS.get(type_id, {}).get("bonus", 0)
 
 
-def _get_adjacent_ids(region: dict, visible_regions: list = None) -> list:
-    """Extract all adjacent region IDs from a region object."""
+def _get_adjacent_ids(region_obj, visible_regions: list = None) -> list:
+    """Extract all adjacent region IDs from a region object or ID string."""
+    if isinstance(region_obj, str):
+        # If we only have an ID, we need to find the full object in visibleRegions
+        if visible_regions:
+            for r in visible_regions:
+                if isinstance(r, dict) and r.get("id") == region_obj:
+                    return _get_adjacent_ids(r)
+        return []
+        
     adj = []
-    conns = region.get("connections", [])
+    conns = region_obj.get("connections", [])
     for c in conns:
         if isinstance(c, str):
             adj.append(c)
@@ -775,34 +781,11 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
                      and i.get("typeId", "").lower() in RECOVERY_ITEMS
                      and RECOVERY_ITEMS.get(i.get("typeId", "").lower(), 0) > 0)
 
-    # If inventory full, check if we should drop something for a high-priority item
+    # If inventory full (max 10 slots per limits.md), skip pickup entirely.
+    # NOTE: 'drop' is NOT a valid game action — do NOT attempt to drop items.
     if len(inventory) >= 10:
-        local_items.sort(key=lambda i: _pickup_score(i, inventory, heal_count), reverse=True)
-        best = local_items[0]
-        best_score = _pickup_score(best, inventory, heal_count)
-        
-        # Only drop for VERY high priority items (Moltz, Katana, etc.)
-        if best_score >= 100:
-            # Find worst item to drop
-            worst = None
-            worst_val = 999
-            for item in inventory:
-                val = _pickup_score(item, inventory, heal_count)
-                if val < worst_val:
-                    worst_val = val
-                    worst = item
-            
-            if worst and best_score > worst_val + 50:
-                log.info("DROP_FOR_PICKUP: Dropping %s (val=%d) for %s (val=%d)", 
-                         worst.get("typeId"), worst_val, best.get("typeId"), best_score)
-                return {"action": "drop", "data": {"itemId": worst["id"]},
-                        "reason": f"DROP_FOR_PICKUP: Making room for {best.get('typeId')}"}
+        log.info("PICKUP: Inventory full (%d/10) — skipping pickup", len(inventory))
         return None
-
-    # Count current healing items for stockpile management
-    heal_count = sum(1 for i in inventory if isinstance(i, dict)
-                     and i.get("typeId", "").lower() in RECOVERY_ITEMS
-                     and RECOVERY_ITEMS.get(i.get("typeId", "").lower(), 0) > 0)
 
     # Sort by priority — Moltz always first
     local_items.sort(
@@ -1344,13 +1327,22 @@ def _choose_move_target(connections, danger_ids: set,
             score = 1
             score += item_region_scores.get(conn, 0)
             score += distant_direction_bonus.get(conn, 0)
-            # VISITED REGION PENALTY for string connections
-            if conn in _visited_regions:
-                score -= 30  # Increased penalty
-                log.info("MOVE: Region %s penalized (-30) for being visited (string)", conn[:8])
+            
+            # VISITED REGION PENALTY
+            is_new = conn not in _visited_regions
+            if not is_new:
+                score -= 60
             else:
-                score += 10  # Bonus for unexplored
-            candidates.append((conn, score))
+                score += 45
+
+            candidates.append({
+                "id": conn,
+                "name": conn[:8],
+                "score": score,
+                "enemies": enemy_region_count.get(conn, 0),
+                "intel": [],
+                "is_new": is_new
+            })
 
         elif isinstance(conn, dict):
             rid = conn.get("id", "")
@@ -1358,35 +1350,20 @@ def _choose_move_target(connections, danger_ids: set,
             if not rid or conn.get("isDeathZone") or rid in danger_ids:
                 continue
 
-            # Scoring Factors
+            # Scoring
             score = 0
-            
-            # 1. ENEMY ATTRACTION (Hunter Logic)
             enemy_count = enemy_region_count.get(rid, 0)
-            if enemy_count > 0:
-                if my_hp > 70:
-                    score += 25  # High priority to hunt
-                elif my_hp > 40:
-                    score += 15  # Moderate priority
-                else:
-                    score -= 10  # Low health, be careful
-                
-                # --- NEW: THIRD-PARTY / STEAL KILL LOGIC ---
-                if enemy_count >= 2 and my_hp > 60:
-                    score += 20  # HOT ZONE! High chance of steal kill
-                    log.info("HOT_ZONE_DETECTED: Multiple enemies in %s, moving for steal kill!", conn.get('name', rid))
-            
-            # 2. ITEM ATTRACTION
+
+            # 1. RESOLVE REGION & TERRAIN
             resolved = _resolve_region(conn, {"visibleRegions": visible_regions})
             terrain = resolved.get("terrain", "").lower() if resolved else conn.get("terrain", "").lower()
-
-            # Terrain scoring per game-systems.md
             terrain_scores = {
                 "hills": 4, "plains": 2, "ruins": 2,
                 "forest": 1, "water": -3,
             }
             score += terrain_scores.get(terrain, 0)
 
+            # 2. ITEMS
             score += item_region_scores.get(rid, 0)
             score += distant_direction_bonus.get(rid, 0)
 
@@ -1396,7 +1373,7 @@ def _choose_move_target(connections, danger_ids: set,
                 unused = [f for f in facs if isinstance(f, dict) and not f.get("isUsed")]
                 score += len(unused) * 2
 
-            # 2. WEATHER
+            # 3. WEATHER
             weather = conn.get("weather", "").lower()
             weather_penalty = {"storm": -2, "fog": -1, "rain": 0, "clear": 1}
             score += weather_penalty.get(weather, 0)
@@ -1420,7 +1397,7 @@ def _choose_move_target(connections, danger_ids: set,
                 elif is_ready_for_war:
                     score += enemy_count * 25
                     if enemy_count >= 2:
-                        score += 30 
+                        score += 50  # Increased Steal Kill bonus
                         log.info("🔥 HOT_ZONE: Multiple enemies in %s - MOVING FOR STEAL KILL!", resolved.get("name", rid))
                 elif AGGRESSION_LEVEL == "aggressive":
                     score += enemy_count * 10
@@ -1433,9 +1410,7 @@ def _choose_move_target(connections, danger_ids: set,
             else:
                 score += 45
 
-            # 6. ITEMS & MAP KNOWLEDGE
-            score += item_region_scores.get(rid, 0)
-            score += distant_direction_bonus.get(rid, 0)
+            # 6. GUARDIAN HUNTING
             if rid in _guardian_locations: score += 15
             if _map_knowledge.get("revealed") and rid in _map_knowledge.get("safe_center", []):
                 score += 5
@@ -1474,6 +1449,9 @@ def _choose_move_target(connections, danger_ids: set,
     if not candidates:
         log.debug("MOVE: No valid candidates from %d connections", len(connections))
         return None
+
+    # SORT BY SCORE (Highest first)
+    candidates.sort(key=lambda x: x["score"], reverse=True)
 
     # Log Move Radar for visual feedback
     log.info("--- MOVE_RADAR (Top 3 Candidates) ---")
