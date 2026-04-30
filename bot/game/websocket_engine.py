@@ -90,7 +90,8 @@ class WebSocketEngine:
         api_key = get_api_key()
         headers = {
             "Authorization": f"mr-auth {api_key}",
-            "X-API-Version": SKILL_VERSION,
+            "X-API-Key": api_key,
+            "X-Version": SKILL_VERSION,
         }
 
         self._running = True
@@ -109,8 +110,10 @@ class WebSocketEngine:
         while self._running and retry_count < max_retries:
             try:
                 log.info("Connecting WebSocket to %s...", WS_URL)
+                ws_url_with_auth = f"{WS_URL}?apiKey={api_key}"
+                log.info("Handshake with key: %s...", api_key[:8])
                 async with websockets.connect(
-                    WS_URL,
+                    ws_url_with_auth,
                     additional_headers=headers,
                     ping_interval=None,  # We handle our own pings
                     max_size=2**20,  # 1MB max message
@@ -144,7 +147,7 @@ class WebSocketEngine:
         """
         self.ws = ws
         retry_count = 0  # Reset on successful connect
-        log.info("✅ WebSocket connected for game=%s", self.game_id)
+        log.info("[OK] WebSocket connected for game=%s", self.game_id)
 
         # Start ping keepalive
         self._ping_task = asyncio.create_task(self._ping_loop())
@@ -248,7 +251,7 @@ class WebSocketEngine:
 
         # ── game_ended ────────────────────────────────────────────────
         elif msg_type == "game_ended":
-            log.info("═══ GAME ENDED ═══")
+            log.info("=== GAME ENDED ===")
             reset_game_state()  # Clear curse tracking for next game
             self.game_result = msg
             return msg
@@ -302,7 +305,7 @@ class WebSocketEngine:
         alive_count = view.get("aliveCount", "?")
 
         if not self_data.get("isAlive", True):
-            log.info("☠️ Agent DEAD — Alive remaining: %s. Waiting for game_ended...", alive_count)
+            log.info("[DEAD] Agent DEAD — Alive remaining: %s. Waiting for game_ended...", alive_count)
             # Update dashboard with dead state (don't just return silently!)
             dk = self.dashboard_key
             dashboard_state.update_agent(dk, {

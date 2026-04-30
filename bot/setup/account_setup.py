@@ -106,7 +106,7 @@ async def run_first_run_intake() -> dict:
     if restored:
         return restored
 
-    log.info("═══ FIRST-RUN INTAKE ═══")
+    log.info("=== FIRST-RUN INTAKE ===")
     if not _is_interactive():
         log.info("Non-interactive mode (Railway/Docker detected)")
 

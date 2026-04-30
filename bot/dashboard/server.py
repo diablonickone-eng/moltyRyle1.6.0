@@ -74,6 +74,7 @@ async def ws_handler(request):
 
 async def _push_loop(app):
     """Background task: push state snapshots to all WS clients every 1.5s."""
+    global _ws_clients
     log.info("Dashboard push loop started")
     try:
         while True:
@@ -167,6 +168,6 @@ async def start_dashboard(port: int = 8080):
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    log.info("═══════════════════════════════════════════")
-    log.info("  📊 Dashboard running at http://0.0.0.0:%d", port)
-    log.info("═══════════════════════════════════════════")
+    log.info("===========================================")
+    log.info("  Dashboard running at http://0.0.0.0:%d", port)
+    log.info("===========================================")

@@ -22,7 +22,7 @@ async def settle_game(game_result: dict, entry_type: str, memory: AgentMemory):
     smoltz_earned = rewards.get("sMoltz", 0)
     moltz_earned = rewards.get("moltz", 0)
 
-    log.info("═══ GAME SETTLEMENT ═══")
+    log.info("=== GAME SETTLEMENT ===")
     log.info("  Winner: %s | Rank: %d | Kills: %d", "YES" if is_winner else "No", final_rank, kills)
     log.info("  Rewards: %d sMoltz, %d Moltz", smoltz_earned, moltz_earned)
 

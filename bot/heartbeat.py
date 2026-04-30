@@ -44,9 +44,9 @@ class Heartbeat:
 
     async def run(self):
         """Entry point — runs the heartbeat loop indefinitely."""
-        log.info("═══════════════════════════════════════════")
+        log.info("===========================================")
         log.info("  MOLTY ROYALE AI AGENT — STARTING")
-        log.info("═══════════════════════════════════════════")
+        log.info("===========================================")
 
         # Log active config (answers to setup.md First-Run Intake)
         log.info("Config (First-Run Intake answers):")
@@ -323,7 +323,7 @@ class Heartbeat:
 
     async def _play_game(self, game_id: str, agent_id: str, entry_type: str, existing_ws=None):
         """Run the WebSocket gameplay engine."""
-        log.info("═══ PLAYING GAME: %s (type=%s) ═══", game_id, entry_type)
+        log.info("=== PLAYING GAME: %s (type=%s) ===", game_id, entry_type)
 
         # Feed dashboard — use SAME key as heartbeat so no duplicate card
         dashboard_state.update_agent(self._agent_key, {

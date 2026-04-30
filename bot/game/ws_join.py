@@ -14,7 +14,7 @@ from typing import Optional, Tuple
 from bot.api_client import MoltyAPI
 from bot.credentials import get_api_key, get_agent_private_key
 from bot.web3.eip712_signer import sign_join_paid
-from bot.config import WS_JOIN_URL, PAID_ENTRY_FEE_SMOLTZ
+from bot.config import WS_JOIN_URL, PAID_ENTRY_FEE_SMOLTZ, SKILL_VERSION
 from bot.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -50,7 +50,7 @@ async def join_via_websocket(
     api_key = get_api_key()
     headers = {
         "Authorization": f"mr-auth {api_key}",
-        "X-API-Version": SKILL_VERSION,
+        "X-Version": SKILL_VERSION,
     }
     
     log.info("Opening unified join WebSocket: %s (entry_type=%s)", WS_JOIN_URL, entry_type)
@@ -233,7 +233,7 @@ async def check_readiness_from_welcome(api: MoltyAPI) -> dict:
     api_key = get_api_key()
     headers = {
         "Authorization": f"mr-auth {api_key}",
-        "X-API-Version": SKILL_VERSION,
+        "X-Version": SKILL_VERSION,
     }
     
     try:

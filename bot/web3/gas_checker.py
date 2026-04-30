@@ -42,7 +42,7 @@ def require_gas_or_wait(address: str, action_name: str) -> bool:
 
     balance_cross = Web3.from_wei(balance_wei, "ether")
     log.warning(
-        "═══════════════════════════════════════════════════════════════\n"
+        "===============================================================\n"
         "  ⚠️ INSUFFICIENT CROSS FOR GAS — %s\n"
         "  Wallet: %s\n"
         "  Balance: %s CROSS (need min 0.001 CROSS)\n"
@@ -50,7 +50,7 @@ def require_gas_or_wait(address: str, action_name: str) -> bool:
         "  \n"
         "  → Please send CROSS to the wallet above\n"
         "  → Bot will retry automatically every 2 minutes\n"
-        "═══════════════════════════════════════════════════════════════",
+        "===============================================================",
         action_name, address, balance_cross, action_name,
     )
     return False
@@ -85,7 +85,7 @@ async def require_gas_or_wait_async(address: str, action_name: str,
 
         attempt += 1
         log.warning(
-            "═══════════════════════════════════════════════════════════════\n"
+            "===============================================================\n"
             "  ⚠️ INSUFFICIENT CROSS FOR GAS — Attempt #%d\n"
             "  Wallet: %s\n"
             "  Balance: %s CROSS (need min 0.001 CROSS)\n"
@@ -93,7 +93,7 @@ async def require_gas_or_wait_async(address: str, action_name: str,
             "  \n"
             "  → Please send CROSS to the wallet above\n"
             "  → Retrying in %d seconds (%d minutes)...\n"
-            "═══════════════════════════════════════════════════════════════",
+            "===============================================================",
             attempt, address, balance_cross, action_name,
             retry_interval, retry_interval // 60,
         )
