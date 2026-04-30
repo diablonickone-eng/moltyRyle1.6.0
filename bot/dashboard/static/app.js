@@ -219,7 +219,7 @@ function patchAgentCard(card, id, a) {
       <span class="badge ${bc}">${st.toUpperCase()}</span>
     </div>
     <div class="agent-meta">
-      Room: ${esc(a.room_name||'—')} &nbsp;|&nbsp; ID: <span style="color:var(--text)">${esc(roomId)}</span> &nbsp;|&nbsp; 📍 ${esc(region)}
+      Room: ${esc(a.room_name||'—')} &nbsp;|&nbsp; ID: <a href="https://www.moltyroyale.com/games/${esc(roomId)}" target="_blank" style="color:var(--cyan);text-decoration:underline;cursor:pointer">${esc(roomId)}</a> &nbsp;|&nbsp; 📍 ${esc(region)}
     </div>
     <div class="bar-row">
       <div class="bar-wrap">
