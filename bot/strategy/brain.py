@@ -508,6 +508,8 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     # FAST PATH B: Ranged weapon — attack adjacent-region enemies without moving!
     if enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and can_afford_combat:
+        log.debug("FAST_PATH_B: Checking %d enemies in range | ep=%d | can_afford=%s", 
+                  len(enemies_in_range), ep, can_afford_combat)
         target = _select_best_target(
             enemies_in_range, atk, equipped, defense, region_weather,
             my_hp=hp, alive_count=alive_count
@@ -519,6 +521,8 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
                     "reason": f"RANGED: Shooting {target['agent'].get('name','?')} "
                               f"(HP={target['agent'].get('hp','?')} W={w_type})"}
+        else:
+            log.warning("FAST_PATH_B_REJECTED: _select_best_target returned None for %d enemies", len(enemies_in_range))
 
     # PATH C: General scan — target any visible enemy if in range
     if enemies and ep >= ep_budget and can_afford_combat and weather_ok:
