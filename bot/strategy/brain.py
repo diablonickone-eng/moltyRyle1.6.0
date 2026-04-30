@@ -282,6 +282,12 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 or e.get("regionId")[:8] in adjacent_prefixes  # Prefix match
             )
         ]
+        # FALLBACK: If no enemies have regionId at all, assume they're in adjacent for ranged
+        # This handles API inconsistency where visibleAgents lack regionId field
+        if not enemies_in_range and enemies and not any(e.get("regionId") for e in enemies):
+            log.warning("API_FALLBACK: No enemies have regionId, assuming all in adjacent for ranged combat")
+            enemies_in_range = enemies[:]  # Assume all visible enemies are in adjacent
+        
         # DEBUG: Log why enemies_in_range might be 0
         log.info("RANGE_DEBUG: w_range=%d | adjacent_ids=%s | enemies_with_regionId=%s | matched=%d",
                  w_range, list(adjacent_ids)[:5], 
