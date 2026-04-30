@@ -77,8 +77,8 @@ AUTO_IDENTITY = os.getenv("AUTO_IDENTITY", "true").lower() == "true"         # Q
 
 # ── Strategy / Combat thresholds ──────────────────────────────────────
 AGGRESSION_LEVEL = os.getenv("AGGRESSION_LEVEL", "aggressive").lower()       # aggressive | balanced | passive
-HP_CRITICAL_THRESHOLD = int(os.getenv("HP_CRITICAL_THRESHOLD", "25"))
-HP_MODERATE_THRESHOLD = int(os.getenv("HP_MODERATE_THRESHOLD", "45"))
-GUARDIAN_FARM_MIN_HP = int(os.getenv("GUARDIAN_FARM_MIN_HP", "35"))
+HP_CRITICAL_THRESHOLD = int(os.getenv("HP_CRITICAL_THRESHOLD", "35"))        # Raised from 25
+HP_MODERATE_THRESHOLD = int(os.getenv("HP_MODERATE_THRESHOLD", "70"))        # Raised from 45
+GUARDIAN_FARM_MIN_HP = int(os.getenv("GUARDIAN_FARM_MIN_HP", "50"))          # Raised from 35
 COMBAT_MIN_EP = int(os.getenv("COMBAT_MIN_EP", "15"))
 

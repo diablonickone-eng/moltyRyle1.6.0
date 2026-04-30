@@ -159,10 +159,11 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     3. Critical healing
     3b. Use utility items (Map, Energy Drink)
     4. Free actions (pickup, equip)
-    5. Guardian farming (120 sMoltz per kill — only 5 guardians!)
-    6. Favorable agent combat
+    5. Smart Agent Combat (Prioritize players if we have good gear/resources)
+    6. Guardian farming (120 sMoltz per kill)
     7. Monster farming
     8. Facility interaction
+    8b. FACILITY CAMPING / PATROL (Wait for prey if HP/EP low)
     9. Strategic movement (NEVER into DZ or pending DZ)
     10. Rest
 
@@ -206,6 +207,12 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     log.info("LOOT_SCAN: total_visible=%d | HERE=%d (wpn=%d heal=%d moltz=%d) | NEARBY=%d",
              len(visible_items), len(items_here), len(weapons_here), len(healing_here), 
              len(currency_here), len(items_nearby))
+    
+    # Inventory summary for monitoring
+    inv_heals = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS])
+    inv_wpns = len([i for i in inventory if i.get("category") == "weapon" or i.get("typeId", "").lower() in WEAPONS])
+    log.info("INVENTORY: HP=%d EP=%d | HealItems=%d Weapons=%d | WeaponEquipped=%s",
+             hp, ep, inv_heals, inv_wpns, equipped.get("typeId") if isinstance(equipped, dict) else equipped)
     visible_regions = view.get("visibleRegions", [])
     connected_regions = view.get("connectedRegions", [])
     pending_dz = view.get("pendingDeathzones", [])
@@ -365,7 +372,33 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
                     "reason": f"EP RECOVERY: EP={ep}, using energy drink (+5 EP)"}
 
-    # ── Priority 5: Guardian farming (120 sMoltz per kill!) ────────
+    # ── Priority 5: Smart Agent Combat (Kill Hunting) ──────────────
+    # "Predator Cerdas" logic: Only hunt if we have weapon + healing resources.
+    has_good_weapon = equipped and equipped.get("typeId", "").lower() in ("katana", "sniper", "sword", "pistol")
+    healing_count = len([i for i in inventory if i.get("typeId", "").lower() in ("medkit", "bandage", "emergency_food")])
+    
+    # Aggression criteria: good weapon + at least 1 healing item + decent HP
+    is_ready_for_war = has_good_weapon and healing_count >= 1 and hp >= 60
+    
+    hp_threshold = _get_combat_hp_threshold(alive_count, equipped)
+    weather_ok = region_weather not in ("storm", "fog") or get_weapon_range(equipped) >= 1
+    ep_budget = COMBAT_MIN_EP + move_ep_cost + ep_reserve
+    
+    if enemies and ep >= ep_budget and (hp >= hp_threshold or is_ready_for_war) and weather_ok:
+        target = _select_best_target(
+            enemies, atk, equipped, defense, region_weather,
+            my_hp=hp, alive_count=alive_count
+        )
+        if target:
+            # Special logic for Predator mode: if we are ready for war, be more persistent
+            w_range = get_weapon_range(equipped)
+            if _is_in_range(target["agent"], region_id, w_range, connections):
+                return {"action": "attack",
+                        "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
+                        "reason": f"PREDATOR: Hunting {target['agent'].get('name','?')} "
+                                  f"(Weapon={equipped.get('typeId')} Heal={healing_count})"}
+                
+    # ── Priority 6: Guardian farming (120 sMoltz per kill!) ────────
     # Only farm if: HP is safe + we can win the fight + EP budget for chase
     guardians = [a for a in visible_agents
                  if a.get("isGuardian", False) and a.get("isAlive", True)]
@@ -384,30 +417,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                             "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
                             "reason": f"GUARDIAN FARM: HP={target['agent'].get('hp','?')} "
                                       f"(120 sMoltz! dmg={target['my_dmg']} vs {target['enemy_dmg']})"}
-
-    # ── Priority 6: Favorable agent combat + kiting ─────────────────
-    hp_threshold = _get_combat_hp_threshold(alive_count, equipped)
-    weather_ok = region_weather not in ("storm", "fog") or get_weapon_range(equipped) >= 1
-    # EP budget: combat EP + move EP for kite/retreat
-    ep_budget = COMBAT_MIN_EP + move_ep_cost + ep_reserve
-    has_ep_for_combat = ep >= ep_budget
-    if enemies and has_ep_for_combat and hp >= hp_threshold and weather_ok:
-        target = _select_best_target(
-            enemies, atk, equipped, defense, region_weather,
-            my_hp=hp, alive_count=alive_count
-        )
-        if target:
-            w_range = get_weapon_range(equipped)
-            if _is_in_range(target["agent"], region_id, w_range, connections):
-                action = {"action": "attack",
-                          "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
-                          "reason": f"COMBAT: HP={target['agent'].get('hp','?')} "
-                                    f"dmg={target['my_dmg']} vs {target['enemy_dmg']}"}
-                # Kiting: if we should kite, plan to retreat next turn
-                # (return attack action now; movement happens next turn)
-                if target.get("should_kite"):
-                    log.info("🏹 Kiting: attack now, retreat next turn")
-                return action
 
     # ── Priority 7: Monster farming (only when EP is abundant) ────
     monsters = [m for m in visible_monsters if m.get("hp", 0) > 0]
@@ -433,6 +442,16 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             return {"action": "interact",
                     "data": {"interactableId": facility["id"]},
                     "reason": f"FACILITY: {facility.get('type', 'unknown')}"}
+
+    # ── Priority 8b: FACILITY CAMPING (Stay and rest if low) ───────
+    # If we are at a Medical Facility or Supply Cache and HP < 70 or EP < 8,
+    # stay and rest instead of moving.
+    has_camp_facility = any(f.get("type", "").lower() in ("medical_facility", "supply_cache")
+                            for f in interactables if isinstance(f, dict))
+    if has_camp_facility and (hp < 70 or ep < 8) and not items_here and not guardians_here:
+        log.info("🏕️ Camping at facility — HP=%d EP=%d, resting to recover...", hp, ep)
+        return {"action": "rest", "data": {},
+                "reason": f"CAMPING: Resting at facility to recover (HP={hp} EP={ep})"}
 
     # ── Priority 9: Strategic movement ────────────────────────────
     # Only move if there's something worth moving toward (items, facilities, enemies)
@@ -1264,6 +1283,11 @@ def _choose_move_target(connections, danger_ids: set,
                 score += 5
                 log.debug("STORM_COVER: Preferring %s terrain for cover", terrain)
 
+            # ENDGAME HIDING: prefer ruins or forest when few players left
+            if alive_count <= 5 and terrain in ("ruins", "forest"):
+                score += 10
+                log.info("ENDGAME_HIDING: Preferring %s terrain for final stage", terrain)
+
             # Late game: strong bonus for safe regions
             if alive_count < 30:
                 score += 3
@@ -1311,8 +1335,6 @@ def _choose_move_target(connections, danger_ids: set,
                 elif w_range >= 1 and any(enemy_region_count.get(adj, 0) > 0 for adj in _get_adjacent_ids(conn, visible_regions)):
                     score += 5  # Bonus for staying at range
             
-            candidates.append((rid, score))
-
             candidates.append((rid, score))
 
     if not candidates:
