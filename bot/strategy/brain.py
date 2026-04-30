@@ -506,6 +506,18 @@ def _estimate_enemy_weapon_bonus(agent: dict) -> int:
     return WEAPONS.get(type_id, {}).get("bonus", 0)
 
 
+def _get_adjacent_ids(region: dict, visible_regions: list = None) -> list:
+    """Extract all adjacent region IDs from a region object."""
+    adj = []
+    conns = region.get("connections", [])
+    for c in conns:
+        if isinstance(c, str):
+            adj.append(c)
+        elif isinstance(c, dict):
+            adj.append(c.get("id", ""))
+    return adj
+
+
 def _select_best_target(targets: list, my_atk: int, my_equipped,
                         my_def: int, weather: str,
                         my_hp: int = 100, alive_count: int = 100) -> dict | None:
@@ -643,8 +655,6 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
     - Binoculars: passive vision+1, always pickup
     - Map: pickup and use immediately
     """
-    if len(inventory) >= 10:
-        return None
     # Filter items in current region (items may lack regionId field)
     local_items = [i for i in items
                    if isinstance(i, dict) and i.get("regionId") == region_id]
@@ -653,6 +663,35 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
     if not local_items:
         local_items = [i for i in items if isinstance(i, dict) and i.get("id")]
     if not local_items:
+        return None
+
+    # Count current healing items for stockpile management
+    heal_count = sum(1 for i in inventory if isinstance(i, dict)
+                     and i.get("typeId", "").lower() in RECOVERY_ITEMS
+                     and RECOVERY_ITEMS.get(i.get("typeId", "").lower(), 0) > 0)
+
+    # If inventory full, check if we should drop something for a high-priority item
+    if len(inventory) >= 10:
+        local_items.sort(key=lambda i: _pickup_score(i, inventory, heal_count), reverse=True)
+        best = local_items[0]
+        best_score = _pickup_score(best, inventory, heal_count)
+        
+        # Only drop for VERY high priority items (Moltz, Katana, etc.)
+        if best_score >= 100:
+            # Find worst item to drop
+            worst = None
+            worst_val = 999
+            for item in inventory:
+                val = _pickup_score(item, inventory, heal_count)
+                if val < worst_val:
+                    worst_val = val
+                    worst = item
+            
+            if worst and best_score > worst_val + 50:
+                log.info("DROP_FOR_PICKUP: Dropping %s (val=%d) for %s (val=%d)", 
+                         worst.get("typeId"), worst_val, best.get("typeId"), best_score)
+                return {"action": "drop", "data": {"itemId": worst["id"]},
+                        "reason": f"DROP_FOR_PICKUP: Making room for {best.get('typeId')}"}
         return None
 
     # Count current healing items for stockpile management
@@ -1220,6 +1259,11 @@ def _choose_move_target(connections, danger_ids: set,
             weather_penalty = {"storm": -2, "fog": -1, "rain": 0, "clear": 1}
             score += weather_penalty.get(weather, 0)
 
+            # STORM COVER: prefer forest or ruins when it's storming
+            if weather == "storm" and terrain in ("forest", "ruins"):
+                score += 5
+                log.debug("STORM_COVER: Preferring %s terrain for cover", terrain)
+
             # Late game: strong bonus for safe regions
             if alive_count < 30:
                 score += 3
@@ -1228,26 +1272,25 @@ def _choose_move_target(connections, danger_ids: set,
             enemy_count = enemy_region_count.get(rid, 0)
             if enemy_count > 0:
                 if my_hp < 40:
-                    score -= enemy_count * 5  # Strong avoidance when low HP
+                    score -= enemy_count * 10  # Stronger avoidance when low HP
                 elif AGGRESSION_LEVEL == "aggressive":
-                    score += enemy_count * 1  # Aggressive: seek fights
+                    score += enemy_count * 2
                 else:
-                    score -= enemy_count * 2  # Balanced: mild avoidance
+                    score -= enemy_count * 3
 
             # TERRAIN ADVANTAGE: hills = vision +2 = scouting advantage
             if terrain == "hills":
-                score += 2  # Extra bonus for scouting position
+                score += 3
 
             # VISITED REGION PENALTY: prefer unexplored regions (extremely strong penalty)
             if rid in _visited_regions:
-                score -= 50  # Extremely strong penalty - force exploration over revisiting
-                log.info("MOVE: Region %s penalized (-50) for being visited", rid[:8])
+                score -= 40
             else:
-                score += 10  # Strong bonus for unexplored regions - encourage exploration
+                score += 15
 
             # GUARDIAN HUNTING: bonus for regions with known guardians
             if rid in _guardian_locations:
-                score += 8  # Strong attraction to guardian regions (120 sMoltz!)
+                score += 15  # Buffed attraction
 
             # MAP KNOWLEDGE: prefer center regions learned from Map
             if _map_knowledge.get("revealed") and rid in _map_knowledge.get("safe_center", []):
@@ -1260,10 +1303,15 @@ def _choose_move_target(connections, danger_ids: set,
             # WEAPON RANGE POSITIONING: maintain optimal range for ranged weapons
             if equipped:
                 w_range = get_weapon_range(equipped)
-                if w_range >= 1:
-                    # Ranged weapons prefer not to be in same region as enemies
-                    if enemy_count > 0:
-                        score += 2  # Bonus for positioning at range
+                if w_range >= 1 and enemy_count > 0:
+                    # If we have a gun, we PREFER to stay 1 region away from enemies
+                    # instead of moving into their region.
+                    score -= 10  # Penalty for moving into melee range with a gun
+                    log.debug("RANGED_POSITIONING: Avoiding melee range for region %s", rid[:8])
+                elif w_range >= 1 and any(enemy_region_count.get(adj, 0) > 0 for adj in _get_adjacent_ids(conn, visible_regions)):
+                    score += 5  # Bonus for staying at range
+            
+            candidates.append((rid, score))
 
             candidates.append((rid, score))
 

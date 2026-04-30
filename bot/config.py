@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Skill / API version ──────────────────────────────────────────────
-SKILL_VERSION = "1.6.0"
+SKILL_VERSION = "1.5.2"
 
 # ── URLs ──────────────────────────────────────────────────────────────
 API_BASE = "https://cdn.moltyroyale.com/api"
@@ -17,7 +17,7 @@ WS_URL = "wss://cdn.moltyroyale.com/ws/agent"      # Gameplay/resume
 WS_JOIN_URL = "wss://cdn.moltyroyale.com/ws/join"  # Unified join (v1.6.0)
 
 # ── Feature Flags ────────────────────────────────────────────────────
-USE_V160_JOIN = os.getenv("USE_V160_JOIN", "true").lower() == "true"  # Use /ws/join unified flow
+USE_V160_JOIN = os.getenv("USE_V160_JOIN", "false").lower() == "true"  # v1.6.0 feature, default off for 1.5.2 compatibility
 
 # ── Chain config (CROSS Mainnet) ──────────────────────────────────────
 CROSS_CHAIN_ID = 612055

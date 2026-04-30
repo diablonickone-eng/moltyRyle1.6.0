@@ -116,9 +116,10 @@ class Heartbeat:
             me = await self.api.get_accounts_me()
         except APIError as e:
             if e.status == 401:
-                log.error("Invalid API key. Re-run setup.")
+                log.error("Invalid API key (401). Check dev-agent/credentials.json or .env. Re-run setup if needed.")
                 self.running = False
                 return
+            log.error("API error (%d): %s", e.status, e.message)
             raise
 
         # Step 2: Determine state

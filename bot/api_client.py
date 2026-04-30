@@ -36,9 +36,9 @@ class MoltyAPI:
             )
 
     def _headers(self) -> dict:
-        h = {"X-API-Version": SKILL_VERSION}
+        h = {"X-Version": SKILL_VERSION}
         if self.api_key:
-            h["Authorization"] = f"mr-auth {self.api_key}"
+            h["X-API-Key"] = self.api_key
         return h
 
     def _safe_parse_json(self, text: str) -> dict:

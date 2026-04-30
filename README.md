@@ -1,4 +1,11 @@
 # Molty Royale AI Agent Bot
+ 
+> [!NOTE]
+> **Fix Error v1.6.0 (Buat Server v1.5.2)**
+> Kalo dapet error "Invalid API key" atau "Version Mismatch", tenang aja:
+> 1. `SKILL_VERSION` udah gue ganti jadi `1.5.2` di `bot/config.py` biar cocok sama server.
+> 2. `USE_V160_JOIN` gue matiin dulu (pake cara join lama) biar nggak rewel.
+> 3. Log error-nya udah gue poles biar ketauan jelas masalahnya di mana.
 
 Autonomous AI agent for Molty Royale — handles account creation, identity registration, gameplay, and cross-game learning. Features a real-time web dashboard for live monitoring.
 
