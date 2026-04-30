@@ -256,18 +256,44 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     # Combat/Aggression pre-calculations
     enemies = [a for a in visible_agents if not a.get("isGuardian") and a.get("isAlive") and a.get("id") != self_data.get("id")]
-    enemies_here = [e for e in enemies if e.get("regionId") == region_id]
-    hp_threshold = _get_combat_hp_threshold(alive_count, equipped)
     w_type = equipped.get("typeId", "").lower() if isinstance(equipped, dict) else ""
     has_weapon = w_type in ("katana", "sniper", "sword", "pistol", "dagger", "bow")
     healing_count = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS])
-    
+    w_range = WEAPONS.get(w_type, {}).get("range", 0)
+
+    # enemies_here: agents in the same region OR agents with no regionId (API may omit it)
+    # Per api-summary.md, visibleAgents does NOT guarantee a regionId field.
+    # If regionId missing → assume same region (they're in our vision = likely co-located).
+    # For ranged weapons, also include adjacent-region enemies.
+    enemies_here = [
+        e for e in enemies
+        if not e.get("regionId")              # No regionId → assume same region
+        or e.get("regionId") == region_id     # Explicitly same region
+    ]
+    # For ranged weapons, also consider adjacent-region enemies as attackable
+    if w_range >= 1:
+        adjacent_ids = set(_get_region_id(c) for c in (connected_regions or region.get("connections", [])))
+        enemies_in_range = [
+            e for e in enemies
+            if e.get("regionId") in adjacent_ids
+        ]
+    else:
+        enemies_in_range = []
+
+    hp_threshold = _get_combat_hp_threshold(alive_count, equipped)
+
     # Aggression criteria: weapon + at least 1 healing item + decent HP
     is_ready_for_war = has_weapon and healing_count >= 1 and hp >= 60
     # FINISHER logic: If enemy is weak, we don't need "ready for war"
     # Aggressive buff: if our HP is high (>80), we consider anyone < 50 HP as a finisher target
     finisher_threshold = 50 if hp > 80 else 30
     finisher_targets = [e for e in enemies if e.get("hp", 100) < finisher_threshold]
+
+    # Log enemy scan for debugging — critical to trace why attack isn't firing
+    log.info("ENEMY_SCAN: total_visible=%d | here=%d | in_range=%d | finishers=%d | ready_for_war=%s | w_type=%s",
+             len(enemies), len(enemies_here), len(enemies_in_range), len(finisher_targets),
+             is_ready_for_war, w_type or "fist")
+
     can_afford_combat = hp >= 40 or (hp >= hp_threshold and is_ready_for_war)
 
     if not is_alive:
@@ -336,7 +362,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     guardians_here = [a for a in visible_agents
                       if a.get("isGuardian", False) and a.get("isAlive", True)
                       and a.get("regionId") == region_id]
-    enemies_here = [e for e in enemies if e.get("regionId") == region_id]
+    # enemies_here sudah didefinisikan di atas dengan benar (termasuk yang tanpa regionId)
 
     # Flee from guardians when HP low (with retreat path planning)
     if guardians_here and hp < GUARDIAN_FARM_MIN_HP and ep >= move_ep_cost:
@@ -407,8 +433,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     
     # ── Priority 4: Kill Finisher (Attack before Looting!) ─────────
     # If there's a weak enemy in the SAME region, KILL them before they move or heal.
-    if finisher_targets and ep >= (COMBAT_MIN_EP + move_ep_cost) and can_afford_combat:
-        targets_here = [e for e in finisher_targets if e.get("regionId") == region_id]
+    if finisher_targets and ep >= COMBAT_MIN_EP and can_afford_combat:
+        # Same logic as enemies_here: include enemies without regionId (assume same region)
+        targets_here = [e for e in finisher_targets if not e.get("regionId") or e.get("regionId") == region_id]
         if targets_here:
             target = _select_weakest(targets_here)
             if target:
@@ -440,10 +467,10 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     # ── Priority 7: Smart Agent Combat (Kill Hunting) ──────────────
     # "Predator Cerdas" logic: Only hunt if we can afford it
-    weather_ok = region_weather not in ("storm", "fog") or get_weapon_range(equipped) >= 1
+    weather_ok = region_weather not in ("storm", "fog") or w_range >= 1
     ep_budget = COMBAT_MIN_EP + move_ep_cost + ep_reserve
 
-    # FAST PATH: Enemies in the SAME region — attack immediately!
+    # FAST PATH A: Enemies in SAME region (or no regionId) — attack immediately!
     if enemies_here and ep >= COMBAT_MIN_EP and can_afford_combat and weather_ok:
         target = _select_best_target(
             enemies_here, atk, equipped, defense, region_weather,
@@ -457,13 +484,27 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     "reason": f"PREDATOR: Attacking {target['agent'].get('name','?')} "
                               f"(HP={target['agent'].get('hp','?')} Weapon={w_type or 'fist'})"}
 
+    # FAST PATH B: Ranged weapon — attack adjacent-region enemies without moving!
+    if enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and can_afford_combat:
+        target = _select_best_target(
+            enemies_in_range, atk, equipped, defense, region_weather,
+            my_hp=hp, alive_count=alive_count
+        )
+        if target:
+            log.info("🏹 RANGED_ATTACK: Targeting %s in adjacent region (HP=%s)",
+                     target["agent"].get("name", "?"), target["agent"].get("hp", "?"))
+            return {"action": "attack",
+                    "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
+                    "reason": f"RANGED: Shooting {target['agent'].get('name','?')} "
+                              f"(HP={target['agent'].get('hp','?')} W={w_type})"}
+
+    # PATH C: General scan — target any visible enemy if in range
     if enemies and ep >= ep_budget and can_afford_combat and weather_ok:
         target = _select_best_target(
             enemies, atk, equipped, defense, region_weather,
             my_hp=hp, alive_count=alive_count
         )
         if target:
-            w_range = get_weapon_range(equipped)
             in_same_region = target["agent"].get("regionId") == region_id
             should_kite = target.get("should_kite", False)
 
@@ -471,7 +512,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             if w_range >= 1 and in_same_region and connections and should_kite:
                 safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids]
                 if safe_conns:
-                    # Escape to region with fewest enemies
                     best_escape = safe_conns[0]
                     for c in safe_conns:
                         if enemy_region_count.get(_get_region_id(c), 0) == 0:
@@ -479,14 +519,14 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                             break
                     rid = _get_region_id(best_escape)
                     return {"action": "move", "data": {"regionId": rid},
-                            "reason": f"KITE: Repositioning for {equipped.get('typeId')} range advantage"}
+                            "reason": f"KITE: Repositioning for {w_type} range advantage"}
 
             # Standard attack if in range
             if _is_in_range(target["agent"], region_id, w_range, connections):
                 return {"action": "attack",
                         "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
                         "reason": f"PREDATOR: Hunting {target['agent'].get('name','?')} "
-                                  f"(Weapon={equipped.get('typeId')} Heal={healing_count})"}
+                                  f"(W={w_type} Heal={healing_count})"}
             
             # CHASE MODE: If enemy is nearby but out of range, move toward them
             enemy_rid = target["agent"].get("regionId")
@@ -509,7 +549,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 my_hp=hp, alive_count=alive_count
             )
             if target:
-                w_range = get_weapon_range(equipped)
                 if _is_in_range(target["agent"], region_id, w_range, connections):
                     return {"action": "attack",
                             "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
@@ -520,7 +559,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     monsters = [m for m in visible_monsters if m.get("hp", 0) > 0]
     if monsters and ep >= (COMBAT_MIN_EP + ep_reserve) and hp >= 30:
         target = _select_weakest(monsters)
-        w_range = get_weapon_range(equipped)
         if _is_in_range(target, region_id, w_range, connections):
             return {"action": "attack",
                     "data": {"targetId": target["id"], "targetType": "monster"},
