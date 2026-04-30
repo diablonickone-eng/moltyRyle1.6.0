@@ -111,6 +111,22 @@ _guardian_locations: dict = {}  # {region_id: last_seen_turn}
 _failed_actions: dict = {}
 _current_turn: int = 0
 
+# Combat metrics tracking for performance analysis
+_combat_metrics: dict = {
+    "attacks_attempted": 0,
+    "attacks_successful": 0,
+    "kills": 0,
+    "deaths": 0,
+    "damage_dealt": 0,
+    "damage_taken": 0,
+    "finisher_kills": 0,
+    "ranged_attacks": 0,
+    "chase_attempts": 0,
+    "combat_avoided": 0,
+    "enemies_seen": 0,
+    "turns_alive": 0,
+}
+
 
 def _resolve_region(entry, view: dict):
     """Resolve a connectedRegions entry to a full region object.
@@ -139,7 +155,9 @@ def _get_region_id(entry) -> str:
 
 def reset_game_state():
     """Reset per-game tracking state. Call when game ends."""
-    global _known_agents, _map_knowledge, _visited_regions, _guardian_locations, _planned_next_action, _failed_actions, _current_turn
+    global _known_agents, _map_knowledge, _visited_regions, _guardian_locations, _planned_next_action, _failed_actions, _current_turn, _combat_metrics
+    # Log final metrics before reset
+    _log_combat_metrics()
     _known_agents = {}
     _map_knowledge = {"revealed": False, "death_zones": set(), "safe_center": []}
     _visited_regions = set()
@@ -147,7 +165,54 @@ def reset_game_state():
     _planned_next_action = None
     _failed_actions = {}
     _current_turn = 0
+    # Reset metrics for new game
+    _combat_metrics = {
+        "attacks_attempted": 0, "attacks_successful": 0, "kills": 0, "deaths": 0,
+        "damage_dealt": 0, "damage_taken": 0, "finisher_kills": 0, "ranged_attacks": 0,
+        "chase_attempts": 0, "combat_avoided": 0, "enemies_seen": 0, "turns_alive": 0,
+    }
     log.info("Strategy brain reset for new game")
+
+
+def _log_combat_metrics():
+    """Log combat performance metrics at end of game."""
+    global _combat_metrics
+    m = _combat_metrics
+    attacks = m["attacks_attempted"]
+    kills = m["kills"]
+    success_rate = (m["attacks_successful"] / attacks * 100) if attacks > 0 else 0
+    log.info("=" * 50)
+    log.info(" COMBAT METRICS REPORT")
+    log.info("=" * 50)
+    log.info("Attacks Attempted: %d | Successful: %d (%.1f%%)", attacks, m["attacks_successful"], success_rate)
+    log.info("Kills: %d | Finisher Kills: %d", kills, m["finisher_kills"])
+    log.info("Ranged Attacks: %d | Chase Attempts: %d", m["ranged_attacks"], m["chase_attempts"])
+    log.info("Combat Avoided: %d | Enemies Seen: %d", m["combat_avoided"], m["enemies_seen"])
+    log.info("Damage Dealt: %d | Damage Taken: %d", m["damage_dealt"], m["damage_taken"])
+    log.info("Turns Alive: %d", m["turns_alive"])
+    log.info("=" * 50)
+
+
+def _track_attack(attack_type: str = "melee", is_finisher: bool = False):
+    """Track combat attack attempt."""
+    global _combat_metrics
+    _combat_metrics["attacks_attempted"] += 1
+    if attack_type == "ranged":
+        _combat_metrics["ranged_attacks"] += 1
+    if is_finisher:
+        _combat_metrics["finisher_kills"] += 1
+
+
+def _track_chase():
+    """Track chase attempt."""
+    global _combat_metrics
+    _combat_metrics["chase_attempts"] += 1
+
+
+def _track_enemy_seen(count: int = 1):
+    """Track enemy encounters."""
+    global _combat_metrics
+    _combat_metrics["enemies_seen"] += count
 
 
 def track_failed_action(action_type: str, item_id: str = None):
@@ -445,6 +510,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         break
                 rid = _get_region_id(best_escape)
                 log.warning("🚨 EMERGENCY FLEE: HP=%d and NO HEALS! Running to %s", hp, rid[:8])
+                _track_chase()
                 return {"action": "move", "data": {"regionId": rid},
                         "reason": f"ESCAPE: Low HP ({hp}) and no healing items!"}
     
@@ -456,6 +522,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         if targets_here:
             target = _select_weakest(targets_here)
             if target:
+                _track_attack(attack_type="melee", is_finisher=True)
                 return {"action": "attack",
                         "data": {"targetId": target["id"], "targetType": "agent"},
                         "reason": f"FINISHER: Killing weak target {target.get('name','?')} (HP={target.get('hp')}) before looting"}
@@ -468,6 +535,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 if target:
                     log.info("🏹 RANGED_FINISHER: Killing weak %s in adjacent region (HP=%s)",
                              target.get("name", "?"), target.get("hp", "?"))
+                    _track_attack(attack_type="ranged", is_finisher=True)
                     return {"action": "attack",
                             "data": {"targetId": target["id"], "targetType": "agent"},
                             "reason": f"RANGED FINISHER: Killing weak {target.get('name','?')} (HP={target.get('hp')}) with {w_type}"}
@@ -515,6 +583,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         if target:
             log.info("⚔️ SAME_REGION_ATTACK: %d enemies here — targeting %s (HP=%s)",
                      len(enemies_here), target["agent"].get("name", "?"), target["agent"].get("hp", "?"))
+            _track_attack(attack_type="melee")
             return {"action": "attack",
                     "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
                     "reason": f"PREDATOR: Attacking {target['agent'].get('name','?')} "
@@ -531,6 +600,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         if target:
             log.info("🏹 RANGED_ATTACK: Targeting %s in adjacent region (HP=%s)",
                      target["agent"].get("name", "?"), target["agent"].get("hp", "?"))
+            _track_attack(attack_type="ranged")
             return {"action": "attack",
                     "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
                     "reason": f"RANGED: Shooting {target['agent'].get('name','?')} "
@@ -541,6 +611,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             log.info("🏹 RANGED_PRIORITY: No 'acceptable' target, but attacking weakest due to range advantage")
             weakest = _select_weakest(enemies_in_range)
             if weakest:
+                _track_attack(attack_type="ranged")
                 return {"action": "attack",
                         "data": {"targetId": weakest["id"], "targetType": "agent"},
                         "reason": f"RANGED_PRIORITY: Attacking weakest {weakest.get('name','?')} (HP={weakest.get('hp','?')}) with {w_type} range advantage"}
@@ -587,6 +658,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 if any(_get_region_id(c) == enemy_rid for c in connections):
                     log.info("🏃 CHASE_MODE: Pursuing %s (HP=%d) to %s", 
                              target['agent'].get('name','?'), enemy_hp, enemy_rid[:8])
+                    _track_chase()
                     return {"action": "move", "data": {"regionId": enemy_rid},
                             "reason": f"CHASE: Hunting weak {target['agent'].get('name','?')} (HP={enemy_hp})"}
 
@@ -600,6 +672,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     if target_rid not in danger_ids:
                         log.info("🏃 FINISHER_CHASE: Aggressive pursuit of %s (HP=%d) to %s",
                                  target.get('name','?'), target.get('hp', '?'), target_rid[:8])
+                        _track_chase()
                         return {"action": "move", "data": {"regionId": target_rid},
                                 "reason": f"FINISHER CHASE: Pursuing weak {target.get('name','?')} (HP={target.get('hp')})"}
                 
