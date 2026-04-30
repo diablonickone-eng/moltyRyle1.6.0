@@ -477,9 +477,13 @@ class WebSocketEngine:
         reason = decision.get("reason", "")
 
         # Check if cooldown action is allowed
-        if action_type in COOLDOWN_ACTIONS and not can_act:
+        # CRITICAL: Death zone escape overrides cooldown - 1.34 HP/sec damage!
+        is_dz_escape = "ESCAPE" in reason or "DEATH ZONE" in reason.upper() or "DZ" in reason.upper()
+        if action_type in COOLDOWN_ACTIONS and not can_act and not is_dz_escape:
             log.debug("Cooldown active — skipping %s", action_type)
             return
+        if is_dz_escape and not can_act:
+            log.warning("⚠️ Forcing DZ escape despite cooldown - life threatening!")
 
         # Build and send per actions.md envelope spec
         payload = self.action_sender.build_action(

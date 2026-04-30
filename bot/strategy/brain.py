@@ -729,7 +729,38 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         return {"action": "rest", "data": {},
                 "reason": f"CAMPING: Resting at facility to recover (HP={hp} EP={ep})"}
 
-    # ── Priority 9: Strategic movement ────────────────────────────
+    # ── Priority 9: ACTIVE HUNTING (Late Game - seek out enemies!) ──
+    # Kalau late game dan tidak ada musuh di sekitar, proaktif cari musuh!
+    is_late_game = alive_count <= 25
+    is_endgame = alive_count <= 10
+    if (is_late_game or is_endgame) and not enemies_here and hp >= 40 and ep >= 6:
+        # Cari region dengan musuh untuk dihunt
+        best_hunt_target = None
+        best_hunt_score = -1
+        for conn in connections:
+            rid = _get_region_id(conn)
+            if not rid or rid in danger_ids:
+                continue
+            enemy_count = enemy_region_count.get(rid, 0)
+            if enemy_count > 0:
+                # Score: lebih suka 1-2 musuh (bisa dihandle), hindari 3+ (bahaya)
+                score = 50 if enemy_count <= 2 else 10
+                if is_endgame:
+                    score += 30  # Lebih aggressive di endgame
+                if rid not in _visited_regions:
+                    score += 20  # Prefer unexplored
+                if score > best_hunt_score:
+                    best_hunt_score = score
+                    best_hunt_target = rid
+        
+        if best_hunt_target:
+            log.info("🎯 ACTIVE_HUNTING: Late game (%d alive), seeking enemies at %s", 
+                     alive_count, best_hunt_target[:8])
+            _track_chase()
+            return {"action": "move", "data": {"regionId": best_hunt_target},
+                    "reason": f"ACTIVE_HUNTING: Seeking fight in late game ({alive_count} alive)"}
+
+    # ── Priority 9b: Strategic movement ────────────────────────────
     # Only move if there's something worth moving toward (items, facilities, enemies)
     # In empty free rooms, avoid aimless wandering that wastes EP
     has_targets = (len(visible_items) > 0 or
