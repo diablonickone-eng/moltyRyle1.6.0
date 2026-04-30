@@ -556,33 +556,29 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         log.info("WEATHER_DELAY: Storm + no targets + low EP. Waiting for clear weather.")
         return None  # Skip movement, rest instead
 
-    if ep >= move_ep_cost and connections and has_targets:
+    if ep >= move_ep_cost and connections:
         move_target = _choose_move_target(connections, danger_ids,
                                            region, visible_items, alive_count,
                                            visible_agents, self_data.get("id", ""), hp, ep,
                                            visible_regions, equipped, inventory)
-        if move_target:
+        if move_target and move_target != region_id:
             return {"action": "move", "data": {"regionId": move_target},
-                    "reason": "EXPLORE: Moving to better position"}
-    elif not has_targets and ep >= move_ep_cost:
-        # LATE GAME HUNT MODE: actively seek guardians when alive < 15
-        if alive_count < 15 and _guardian_locations:
-            # Move toward known guardian location
-            for rid in _guardian_locations:
-                if rid in [_get_region_id(c) for c in connections]:
-                    log.info("HUNT_MODE: Moving toward guardian region (alive=%d)", alive_count)
-                    return {"action": "move", "data": {"regionId": rid},
-                            "reason": "HUNT: Seeking guardian (120 sMoltz!)"}
-        # VISION EXPLORATION: move to hills for vision when no targets
-        for conn in connections:
-            resolved = _resolve_region(conn, view)
-            if resolved and resolved.get("terrain", "").lower() == "hills":
-                rid = resolved.get("id", "")
+                    "reason": "EXPLORE: Moving to seek targets or vision"}
+        
+        # If best move is current region, but we have no targets, try any unvisited connection
+        if not has_targets and ep >= 4:
+            for conn in connections:
+                rid = _get_region_id(conn)
+                resolved = _resolve_region(conn, {"visibleRegions": visible_regions})
+                terrain = resolved.get("terrain", "").lower() if resolved else ""
+                enemy_count = enemy_region_count.get(rid, 0)
+                
+                score = 10  # Base score for movement
                 if rid not in danger_ids and rid not in _visited_regions:
-                    log.info("VISION_EXPLORE: Moving to hills for vision +2")
                     return {"action": "move", "data": {"regionId": rid},
-                            "reason": "SCOUT: Moving to hills for vision +2"}
-        log.info("NO_TARGETS: No items/facilities/enemies visible. Staying in place to save EP.")
+                            "reason": "EXPLORE: Forcing move to unvisited region"}
+
+    log.info("IDLE: Staying in place (EP=%d, Targets=%s)", ep, has_targets)
 
     # ── Priority 10: Rest (EP < 4 and safe) ───────────────────────
     # Also rest if weather is storm and no urgent targets
@@ -1087,7 +1083,7 @@ def _select_facility(interactables: list, hp: int, ep: int, inventory: list = No
         elif ftype == "watchtower":
             score = 7  # Vision boost = strategic advantage
         elif ftype == "broadcast_station":
-            score = 3  # Low priority
+            score = 0  # WASTED TURN: Does nothing for survival/combat
         elif ftype == "cave":
             score = 0  # AVOID: -2 vision = trap, limits awareness
         if score > best_score:
@@ -1250,6 +1246,11 @@ def _choose_move_target(connections, danger_ids: set,
     """
     global _visited_regions, _guardian_locations, _map_knowledge
     candidates = []
+    # Pre-calculate hunter readiness
+    w_type = equipped.get("typeId", "").lower() if isinstance(equipped, dict) else ""
+    has_weapon = w_type in ("katana", "sniper", "sword", "pistol", "dagger", "bow")
+    healing_count = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS]) if inventory else 0
+    is_ready_for_war = has_weapon and healing_count >= 1 and my_hp >= 60
 
     # Build region item attractiveness scores
     item_region_scores = {}
@@ -1306,6 +1307,8 @@ def _choose_move_target(connections, danger_ids: set,
                 if rid:
                     enemy_region_count[rid] = enemy_region_count.get(rid, 0) + 1
 
+    enemies = [a for a in visible_agents if isinstance(a, dict) and not a.get("isGuardian") and a.get("isAlive") and a.get("id") != my_id]
+
     # Build set of directly connected region IDs
     connected_ids = set()
     for conn in connections:
@@ -1355,8 +1358,27 @@ def _choose_move_target(connections, danger_ids: set,
             if not rid or conn.get("isDeathZone") or rid in danger_ids:
                 continue
 
+            # Scoring Factors
             score = 0
-            terrain = conn.get("terrain", "").lower()
+            
+            # 1. ENEMY ATTRACTION (Hunter Logic)
+            enemy_count = enemy_region_count.get(rid, 0)
+            if enemy_count > 0:
+                if my_hp > 70:
+                    score += 25  # High priority to hunt
+                elif my_hp > 40:
+                    score += 15  # Moderate priority
+                else:
+                    score -= 10  # Low health, be careful
+                
+                # --- NEW: THIRD-PARTY / STEAL KILL LOGIC ---
+                if enemy_count >= 2 and my_hp > 60:
+                    score += 20  # HOT ZONE! High chance of steal kill
+                    log.info("HOT_ZONE_DETECTED: Multiple enemies in %s, moving for steal kill!", conn.get('name', rid))
+            
+            # 2. ITEM ATTRACTION
+            resolved = _resolve_region(conn, {"visibleRegions": visible_regions})
+            terrain = resolved.get("terrain", "").lower() if resolved else conn.get("terrain", "").lower()
 
             # Terrain scoring per game-systems.md
             terrain_scores = {
@@ -1374,82 +1396,49 @@ def _choose_move_target(connections, danger_ids: set,
                 unused = [f for f in facs if isinstance(f, dict) and not f.get("isUsed")]
                 score += len(unused) * 2
 
-            # Avoid weather penalties
+            # 2. WEATHER
             weather = conn.get("weather", "").lower()
             weather_penalty = {"storm": -2, "fog": -1, "rain": 0, "clear": 1}
             score += weather_penalty.get(weather, 0)
+            if weather == "storm" and terrain in ("forest", "ruins"): score += 5
+            if alive_count <= 5 and terrain in ("ruins", "forest"): score += 10
 
-            # STORM COVER: prefer forest or ruins when it's storming
-            if weather == "storm" and terrain in ("forest", "ruins"):
-                score += 5
-                log.debug("STORM_COVER: Preferring %s terrain for cover", terrain)
-
-            # ENDGAME HIDING: prefer ruins or forest when few players left
-            if alive_count <= 5 and terrain in ("ruins", "forest"):
-                score += 10
-                log.info("ENDGAME_HIDING: Preferring %s terrain for final stage", terrain)
-
-            # Late game: strong bonus for safe regions
-            if alive_count < 30:
-                score += 3
-
-            # ENEMY AVOIDANCE / ATTRACTION
-            enemy_count = enemy_region_count.get(rid, 0)
-            
-            # Define hunter readiness in this scope
-            w_type = equipped.get("typeId", "").lower() if isinstance(equipped, dict) else ""
-            has_weapon = w_type in ("katana", "sniper", "sword", "pistol", "dagger", "bow")
-            healing_count = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS]) if inventory else 0
-            is_ready_for_war = has_weapon and healing_count >= 1 and my_hp >= 60
-
-            # SCOUT MODE: Hills provide +2 vision range (strategic advantage)
+            # 3. SCOUT MODE & WEAPON SPECIALIZATION
             if terrain == "hills":
-                score += 12
-                # Extra bonus if we are looking for loot or need to track DZ
-                if len(visible_items) < 5:
-                    score += 8
-                    log.debug("SCOUT_MODE: Favoring hills for better vision (current visible items low)")
+                score += 15
+                log.debug("SCOUT_MODE: Favoring hills for better vision")
 
-            # WEAPON SPECIALIZATION: Prefer terrain that suits the weapon
             if has_weapon:
-                if w_type == "sniper":
-                    if terrain == "hills": score += 15  # Snipers love high ground for vision
-                    elif terrain == "plains": score -= 5 # Too exposed for a sniper
-                elif w_type in ("katana", "sword"):
-                    if terrain in ("forest", "ruins"): score += 10  # Ambush / Close quarters
-                    elif terrain == "plains": score -= 5 # Easy to spot from distance
-                elif w_type == "pistol":
-                    if terrain == "ruins": score += 7 # Cover for tactical shooting
+                if w_type == "sniper" and terrain == "hills": score += 15
+                elif w_type in ("katana", "sword") and terrain in ("forest", "ruins"): score += 10
+                elif terrain == "plains": score -= 5 
 
+            # 4. ENEMY ATTRACTION (Hunter / Steal Kill Logic)
             if enemy_count > 0:
                 if my_hp < 40:
-                    score -= enemy_count * 15  # Avoid if low HP
+                    score -= enemy_count * 20
                 elif is_ready_for_war:
-                    score += enemy_count * 20  # STRONG attraction for hunters!
+                    score += enemy_count * 25
+                    if enemy_count >= 2:
+                        score += 30 
+                        log.info("🔥 HOT_ZONE: Multiple enemies in %s - MOVING FOR STEAL KILL!", resolved.get("name", rid))
                 elif AGGRESSION_LEVEL == "aggressive":
-                    score += enemy_count * 5
+                    score += enemy_count * 10
                 else:
                     score -= enemy_count * 5
 
-            # TERRAIN ADVANTAGE: hills = vision +2 = scouting advantage
-            if terrain == "hills":
-                score += 3
-
-            # VISITED REGION PENALTY: encourage long-range exploration
+            # 5. EXPLORATION vs BACKTRACKING
             if rid in _visited_regions:
-                score -= 60  # Even harsher penalty for backtracking
+                score -= 60
             else:
-                score += 40  # Massive bonus for "New Frontiers"
+                score += 45
 
-            # GUARDIAN HUNTING: bonus for regions with known guardians
-            if rid in _guardian_locations:
-                score += 15  # Buffed attraction
-
-            # MAP KNOWLEDGE: prefer center regions learned from Map
+            # 6. ITEMS & MAP KNOWLEDGE
+            score += item_region_scores.get(rid, 0)
+            score += distant_direction_bonus.get(rid, 0)
+            if rid in _guardian_locations: score += 15
             if _map_knowledge.get("revealed") and rid in _map_knowledge.get("safe_center", []):
-                score += 5  # Strong pull toward center
-
-            # MAP KNOWLEDGE: avoid known death zones
+                score += 5
             if rid in _map_knowledge.get("death_zones", set()):
                 continue  # HARD BLOCK
 
@@ -1486,15 +1475,14 @@ def _choose_move_target(connections, danger_ids: set,
         log.debug("MOVE: No valid candidates from %d connections", len(connections))
         return None
 
-    # Sort and Log Radar
-    candidates.sort(key=lambda x: x["score"], reverse=True)
-    radar_summary = []
+    # Log Move Radar for visual feedback
+    log.info("--- MOVE_RADAR (Top 3 Candidates) ---")
     for c in candidates[:3]:
-        new_tag = "[NEW]" if c["is_new"] else ""
-        intel_tag = f" | Intel:{c['intel']}" if c["intel"] else ""
-        radar_summary.append(f"{c['name']} ({c['score']}pts){new_tag}{intel_tag}")
-    
-    log.info("MOVE_RADAR: Top candidates: %s", " || ".join(radar_summary))
+        status = "🔥 HOT" if c["enemies"] >= 2 else ("👤 HUNT" if c["enemies"] == 1 else "🗺️ EXPLORE")
+        intel_str = f" | Intel: {', '.join(c['intel'])}" if c["intel"] else ""
+        new_tag = " ✨" if c["is_new"] else ""
+        log.info(f"  [{c['score']} pts] {status} -> {c['name']}{new_tag}{intel_str}")
+    # Final Choice
     return candidates[0]["id"]
 
 """
