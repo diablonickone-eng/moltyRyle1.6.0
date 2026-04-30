@@ -107,8 +107,9 @@ _map_knowledge: dict = {"revealed": False, "death_zones": set(), "safe_center": 
 _visited_regions: set = set()
 # Guardian hunting: track last known guardian locations
 _guardian_locations: dict = {}  # {region_id: last_seen_turn}
-# Cooldown planning: pre-planned next action
-_planned_next_action: dict | None = None
+# Failed actions blacklist: {action_key: expiry_turn}
+_failed_actions: dict = {}
+_current_turn: int = 0
 
 
 def _resolve_region(entry, view: dict):
@@ -138,23 +139,36 @@ def _get_region_id(entry) -> str:
 
 def reset_game_state():
     """Reset per-game tracking state. Call when game ends."""
-    global _known_agents, _map_knowledge, _visited_regions, _guardian_locations, _planned_next_action
+    global _known_agents, _map_knowledge, _visited_regions, _guardian_locations, _planned_next_action, _failed_actions, _current_turn
     _known_agents = {}
     _map_knowledge = {"revealed": False, "death_zones": set(), "safe_center": []}
     _visited_regions = set()
     _guardian_locations = {}
     _planned_next_action = None
+    _failed_actions = {}
+    _current_turn = 0
     log.info("Strategy brain reset for new game")
+
+
+def track_failed_action(action_type: str, item_id: str = None):
+    """Blacklist an action that failed on the server."""
+    global _failed_actions
+    key = action_type
+    if item_id:
+        key = f"{action_type}:{item_id}"
+    # Blacklist for 5 turns
+    _failed_actions[key] = _current_turn + 5
+    log.warning("Blacklisting failed action: %s until turn %d", key, _failed_actions[key])
 
 
 def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict | None:
     """
     Main decision engine. Returns action dict or None (wait).
 
-    Priority chain per game-loop.md §3 (v1.5.2):
-    1. DEATHZONE ESCAPE (overrides everything — 1.34 HP/sec!)
+    Priority chain per game-loop.md section 3 (v1.5.2):
+    1. DEATHZONE ESCAPE (overrides everything - 1.34 HP/sec!)
     1b. Pre-escape pending death zone
-    2. [DISABLED] Curse resolution — curse temporarily disabled in v1.5.2
+    2. [DISABLED] Curse resolution - curse temporarily disabled in v1.5.2
     2b. Guardian threat evasion (guardians now attack players!)
     3. Critical healing
     3b. Use utility items (Map, Energy Drink)
@@ -169,6 +183,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     Uses ALL api-summary.md view fields for decision making.
     """
+    global _current_turn
+    _current_turn += 1
+
     self_data = view.get("self", {})
     region = view.get("currentRegion", {})
     hp = self_data.get("hp", 100)
@@ -1080,18 +1097,28 @@ def _find_safe_region_with_exit(connections, danger_ids: set, view: dict = None)
 
 def _use_utility_item(inventory: list, hp: int, ep: int, alive_count: int) -> dict | None:
     """Use utility items immediately after pickup.
-    Map: reveals entire map → triggers _learn_from_map next view.
+    Map: PASSIVE in some versions — just holding it reveals the map.
     Binoculars: PASSIVE (vision+1 just by holding) — no use_item needed.
     """
     for item in inventory:
         if not isinstance(item, dict):
             continue
         type_id = item.get("typeId", "").lower()
-        # Map: use immediately to reveal entire map
-        if type_id == "map":
-            log.info("🗺️ Using Map! Will reveal entire map for strategic learning.")
-            return {"action": "use_item", "data": {"itemId": item["id"]},
-                    "reason": "UTILITY: Using Map — reveals entire map for DZ tracking"}
+        item_id = item.get("id")
+
+        # Skip if this specific item action failed recently
+        action_key = f"use_item:{item_id}"
+        if _failed_actions.get(action_key, 0) > _current_turn:
+            continue
+
+        # Energy Drink: use if EP is low
+        if type_id == "energy_drink" and ep <= 5:
+            return {"action": "use_item", "data": {"itemId": item_id},
+                    "reason": "UTILITY: Using Energy Drink (+5 EP)"}
+                    
+        # Megaphone: use if we want to broadcast (low priority)
+        # if type_id == "megaphone": ...
+
     return None
 
 

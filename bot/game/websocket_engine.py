@@ -77,6 +77,7 @@ class WebSocketEngine:
         self.dashboard_key = agent_id  # fallback to agent_id
         self.dashboard_name = "Agent"
         self._existing_ws = None  # Socket from unified join (v1.6.0)
+        self.last_sent_action = None  # {type, itemId, targetId}
 
     async def run(self, existing_ws=None) -> dict:
         """
@@ -217,6 +218,14 @@ class WebSocketEngine:
                 err_code = err.get("code", "") if isinstance(err, dict) else str(err)
                 err_msg = err.get("message", "") if isinstance(err, dict) else ""
                 log.warning("Action FAILED: %s — %s (canAct=%s)", err_code, err_msg, msg.get("canAct"))
+                
+                # Report failure to brain to avoid spamming
+                if self.last_sent_action:
+                    from bot.strategy.brain import track_failed_action
+                    track_failed_action(
+                        self.last_sent_action.get("type"),
+                        self.last_sent_action.get("itemId")
+                    )
 
         # ── can_act_changed ───────────────────────────────────────────
         # Per actions.md: canAct is at TOP LEVEL
@@ -470,6 +479,13 @@ class WebSocketEngine:
 
         await self._send(payload)
         log.info("→ %s | %s", action_type.upper(), reason)
+        
+        # Store for failure tracking
+        self.last_sent_action = {
+            "type": action_type,
+            "itemId": action_data.get("itemId"),
+            "targetId": action_data.get("targetId")
+        }
 
         # Feed dashboard with action
         dashboard_state.update_agent(self.dashboard_key, {"last_action": f"{action_type}: {reason[:60]}"})
