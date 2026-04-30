@@ -299,10 +299,11 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     hp_threshold = _get_combat_hp_threshold(alive_count, equipped)
 
     # Aggression criteria: weapon + at least 1 healing item + decent HP
-    is_ready_for_war = has_weapon and healing_count >= 1 and hp >= 60
+    # AGGRESSIVE: Lower HP threshold to engage more fights
+    is_ready_for_war = has_weapon and healing_count >= 1 and hp >= 45  # Lowered from 60
     # FINISHER logic: If enemy is weak, we don't need "ready for war"
-    # Aggressive buff: if our HP is high (>80), we consider anyone < 50 HP as a finisher target
-    finisher_threshold = 50 if hp > 80 else 30
+    # AGGRESSIVE: Lower finisher threshold to hunt more weak enemies
+    finisher_threshold = 60 if hp > 70 else 40  # Lowered from 50/30 to 60/40
     finisher_targets = [e for e in enemies if e.get("hp", 100) < finisher_threshold]
 
     # Log enemy scan for debugging — critical to trace why attack isn't firing
@@ -310,7 +311,8 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
              len(enemies), len(enemies_here), len(enemies_in_range), len(finisher_targets),
              is_ready_for_war, w_type or "fist")
 
-    can_afford_combat = hp >= 40 or (hp >= hp_threshold and is_ready_for_war)
+    # AGGRESSIVE: Lower minimum HP to enter combat (was 40)
+    can_afford_combat = hp >= 25 or (hp >= hp_threshold and is_ready_for_war)
 
     if not is_alive:
         return None  # Dead — wait for game_ended
@@ -575,11 +577,31 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             
             # CHASE MODE: If enemy is nearby but out of range, move toward them
             enemy_rid = target["agent"].get("regionId")
-            if (is_ready_for_war or target["agent"].get("hp", 100) < 30) and enemy_rid and enemy_rid != region_id:
+            enemy_hp = target["agent"].get("hp", 100)
+            # AGGRESSIVE: Chase if enemy is weak (<50 HP) or we have advantage
+            should_chase = (enemy_hp < 50 or  # Weak enemy
+                           (is_ready_for_war and enemy_hp < 70) or  # We are strong
+                           target.get("one_shot", False))  # Can one-shot
+            if should_chase and enemy_rid and enemy_rid != region_id:
                 # Check if this region is one of our connections
                 if any(_get_region_id(c) == enemy_rid for c in connections):
+                    log.info("🏃 CHASE_MODE: Pursuing %s (HP=%d) to %s", 
+                             target['agent'].get('name','?'), enemy_hp, enemy_rid[:8])
                     return {"action": "move", "data": {"regionId": enemy_rid},
-                            "reason": f"CHASE: Hunting {target['agent'].get('name','?')} in {enemy_rid[:8]}"}
+                            "reason": f"CHASE: Hunting weak {target['agent'].get('name','?')} (HP={enemy_hp})"}
+
+    # ── AGGRESSIVE CHASE: Pursue ANY weak enemy (finisher) even not in optimal range ──
+    # Kalau ada musuh lemah di adjacent region, kejar meskipun belum "optimal"
+    if finisher_targets and ep >= move_ep_cost and hp >= 30:
+        for target in finisher_targets:
+            target_rid = target.get("regionId")
+            if target_rid and target_rid != region_id:
+                if any(_get_region_id(c) == target_rid for c in connections):
+                    if target_rid not in danger_ids:
+                        log.info("🏃 FINISHER_CHASE: Aggressive pursuit of %s (HP=%d) to %s",
+                                 target.get('name','?'), target.get('hp', '?'), target_rid[:8])
+                        return {"action": "move", "data": {"regionId": target_rid},
+                                "reason": f"FINISHER CHASE: Pursuing weak {target.get('name','?')} (HP={target.get('hp')})"}
                 
     # ── Priority 8: Guardian farming (120 sMoltz per kill!) ────────
     # Only farm if: HP is safe + we can win the fight + EP budget for chase
