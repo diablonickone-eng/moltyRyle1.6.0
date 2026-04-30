@@ -273,10 +273,20 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # For ranged weapons, also consider adjacent-region enemies as attackable
     if w_range >= 1:
         adjacent_ids = set(_get_region_id(c) for c in (connected_regions or region.get("connections", [])))
+        # Normalize matching: some APIs return truncated regionId (first 8 chars)
+        adjacent_prefixes = {rid[:8] for rid in adjacent_ids if rid}
         enemies_in_range = [
             e for e in enemies
-            if e.get("regionId") in adjacent_ids
+            if e.get("regionId") and (
+                e.get("regionId") in adjacent_ids  # Full match
+                or e.get("regionId")[:8] in adjacent_prefixes  # Prefix match
+            )
         ]
+        # DEBUG: Log why enemies_in_range might be 0
+        log.info("RANGE_DEBUG: w_range=%d | adjacent_ids=%s | enemies_with_regionId=%s | matched=%d",
+                 w_range, list(adjacent_ids)[:5], 
+                 [e.get("regionId", "NO_REGION")[:8] for e in enemies],
+                 len(enemies_in_range))
     else:
         enemies_in_range = []
 
