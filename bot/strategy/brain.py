@@ -414,7 +414,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if equip_action:
         return equip_action
     
-
     # Use utility items: Map (reveal map), Megaphone (broadcast)
     util_action = _use_utility_item(inventory, hp, ep, alive_count)
     if util_action:
@@ -875,8 +874,8 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
                      and i.get("typeId", "").lower() in RECOVERY_ITEMS
                      and RECOVERY_ITEMS.get(i.get("typeId", "").lower(), 0) > 0)
 
-    # If inventory full (max 10 slots per limits.md), skip pickup entirely.
-    # NOTE: 'drop' is NOT a valid game action — do NOT attempt to drop items.
+    # If inventory full (max 10 slots per limits.md), skip pickup.
+    # NOTE: 'drop' is NOT a valid game action — prevent clutter by not picking up inferior items.
     if len(inventory) >= 10:
         log.info("PICKUP: Inventory full (%d/10) — skipping pickup", len(inventory))
         return None
@@ -906,15 +905,28 @@ def _pickup_score(item: dict, inventory: list, heal_count: int) -> int:
     # Weapons: higher score if no weapon or this is better
     if category == "weapon":
         bonus = WEAPONS.get(type_id, {}).get("bonus", 0)
-        # Check current best weapon in inventory
-        current_best = 0
+        weapon_range = WEAPONS.get(type_id, {}).get("range", 0)
+        
+        # Check all weapons in inventory - skip pickup if we have better or equal
         for inv_item in inventory:
             if isinstance(inv_item, dict) and inv_item.get("category") == "weapon":
-                cb = WEAPONS.get(inv_item.get("typeId", "").lower(), {}).get("bonus", 0)
-                current_best = max(current_best, cb)
-        if bonus > current_best:
-            return 100 + bonus  # Better weapon = very high priority
-        return 0  # Already have equal or better
+                inv_type = inv_item.get("typeId", "").lower()
+                inv_bonus = WEAPONS.get(inv_type, {}).get("bonus", 0)
+                inv_range = WEAPONS.get(inv_type, {}).get("range", 0)
+                
+                # Skip if we have same weapon type already
+                if inv_type == type_id:
+                    return 0  # Duplicate, don't pickup
+                
+                # For ranged weapons: skip if we have ranged with equal or better bonus
+                if weapon_range >= 1 and inv_range >= 1 and inv_bonus >= bonus:
+                    return 0  # Have better or equal ranged weapon
+                
+                # For melee weapons: skip if we have melee with equal or better bonus
+                if weapon_range == 0 and inv_range == 0 and inv_bonus >= bonus:
+                    return 0  # Have better or equal melee weapon
+        
+        return 100 + bonus  # Better weapon = very high priority
 
     # Binoculars: passive vision+1 permanent, always pickup
     if type_id == "binoculars":
@@ -965,64 +977,6 @@ def _check_equip(inventory: list, equipped) -> dict | None:
                  current_weapon, current_bonus, best.get("typeId", "weapon"), best_bonus)
         return {"action": "equip", "data": {"itemId": best["id"]},
                 "reason": f"EQUIP: {best.get('typeId', 'weapon')} (+{best_bonus} ATK) vs {current_weapon} (+{current_bonus})"}
-    return None
-
-
-def _check_drop_for_upgrade(inventory: list, visible_items: list, equipped) -> dict | None:
-    """Drop worst item if inventory full and better item available.
-    Priority: drop fist/weak weapon for katana/sniper, duplicate healing for better healing.
-    """
-    if len(inventory) < 10:
-        return None
-    
-    # Find worst item to drop
-    worst = None
-    worst_score = 999
-    
-    for item in inventory:
-        if not isinstance(item, dict):
-            continue
-        type_id = item.get("typeId", "").lower()
-        category = item.get("category", "").lower()
-        
-        # Calculate item value score
-        score = 0
-        if category == "weapon":
-            bonus = WEAPONS.get(type_id, {}).get("bonus", 0)
-            score = bonus  # Lower bonus = worse
-        elif type_id in RECOVERY_ITEMS:
-            score = RECOVERY_ITEMS.get(type_id, 0)  # Lower heal = worse
-        elif type_id == "energy_drink":
-            score = 5
-        elif type_id in ("binoculars", "map"):
-            score = 50  # High value, don't drop
-        elif type_id == "rewards":
-            score = 100  # Never drop Moltz
-        
-        if score < worst_score:
-            worst_score = score
-            worst = item
-    
-    # Check if there's a better visible item
-    if worst and visible_items:
-        for item in visible_items:
-            if not isinstance(item, dict):
-                continue
-            type_id = item.get("typeId", "").lower()
-            category = item.get("category", "").lower()
-            
-            # If visible item is better than worst inventory item
-            if category == "weapon" and worst_score < 20:
-                bonus = WEAPONS.get(type_id, {}).get("bonus", 0)
-                if bonus > worst_score:
-                    return {"action": "drop", "data": {"itemId": worst["id"]},
-                            "reason": f"DROP: {worst.get('typeId', 'item')} for better weapon pickup"}
-            elif type_id in RECOVERY_ITEMS and worst_score < 30:
-                heal_val = RECOVERY_ITEMS.get(type_id, 0)
-                if heal_val > worst_score:
-                    return {"action": "drop", "data": {"itemId": worst["id"]},
-                            "reason": f"DROP: {worst.get('typeId', 'item')} for better healing pickup"}
-    
     return None
 
 
