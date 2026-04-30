@@ -487,11 +487,18 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     # ── Priority 6: EP recovery if EP low ─────────────────────────
     # Energy drink (+5 EP) > rest (+1-2 EP). Use before falling back to rest.
-    if ep <= 3:
+    # IMPROVED: Trigger earlier (EP <= 5) to prevent exhaustion
+    if ep <= 5:
         energy_drink = _find_energy_drink(inventory)
         if energy_drink:
+            log.info("EP_CONSERVE: EP=%d low, using energy drink (+5 EP)", ep)
             return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
-                    "reason": f"EP RECOVERY: EP={ep}, using energy drink (+5 EP)"}
+                    "reason": f"EP CONSERVE: EP={ep} low, using energy drink (+5 EP)"}
+        # No energy drink — force rest to recover EP
+        if not enemies_here and not region.get("isDeathZone"):
+            log.info("EP_CONSERVE: EP=%d critically low, forcing rest (+1-2 EP)", ep)
+            return {"action": "rest", "data": {},
+                    "reason": f"EP CONSERVE: EP={ep} critically low, resting to recover"}
 
     # ── Priority 7: Smart Agent Combat (Kill Hunting) ──────────────
     # "Predator Cerdas" logic: Only hunt if we can afford it
