@@ -996,7 +996,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # ── Priority 9b: BOREDOM MOVEMENT ───────────────────────────────
     # If staying idle too long with full EP, force movement to random safe region
     # This prevents getting stuck when all nearby regions visited
-    global _current_turn
     _consecutive_idle_turns = getattr(decide_action, '_consecutive_idle_turns', 0)
     
     if not has_targets and ep >= 8 and not enemies_here:
