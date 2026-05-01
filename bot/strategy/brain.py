@@ -560,19 +560,40 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         "reason": f"OUTMATCHED FLEE: Enemy dmg={e_dmg} vs {my_dmg}, HP={hp}"}
 
     # ── Priority 4b: DEFENSIVE ATTACK (Musuh di region sama = bahaya!) ─────────────────
-    # Kalau ada musuh di region yang sama, SERANG! Jangan pickup/interact dulu!
-    # Musuh akan attack kita kalau kita wasting turn!
-    if enemies_here and has_weapon and hp >= 30 and ep >= COMBAT_MIN_EP:
-        # Cari musuh terlemah atau yang paling berbahaya
+    # HANYA serang jika musuh LEBIH LEMAH atau bisa FINISHER - jangan lawan musuh kuat!
+    # Jika musuh lebih kuat, lebih baik FLEE dulu daripada wasting turn attack yang kalah.
+    if enemies_here and has_weapon and hp >= 40 and ep >= COMBAT_MIN_EP:
         target = _select_weakest(enemies_here)
         if target:
             enemy_hp = target.get("hp", 100)
             enemy_name = target.get("name", "?")
-            log.info("⚔️ DEFENSIVE_ATTACK: %s in same region (HP=%d) — attacking NOW!", 
-                     enemy_name, enemy_hp)
-            return {"action": "attack",
-                    "data": {"targetId": target["id"], "targetType": "agent"},
-                    "reason": f"DEFENSIVE: Attacking {enemy_name} (HP={enemy_hp}) in same region before they attack us!"}
+            enemy_atk = target.get("atk", 10)
+            enemy_def = target.get("def", 5)
+            
+            # Calculate damage
+            enemy_weapon_bonus = _estimate_enemy_weapon_bonus(target)
+            my_dmg = calc_damage(atk, get_weapon_bonus(equipped), enemy_def, region_weather)
+            enemy_dmg = calc_damage(enemy_atk, enemy_weapon_bonus, defense, region_weather)
+            
+            # ONLY attack if we have advantage or can one-shot
+            can_one_shot = enemy_hp <= my_dmg
+            we_stronger = my_dmg > enemy_dmg and hp >= enemy_hp
+            is_finisher = enemy_hp < finisher_threshold
+            
+            if can_one_shot or we_stronger or is_finisher:
+                log.info("⚔️ DEFENSIVE_ATTACK: %s in same region (HP=%d vs our %d) — attacking!", 
+                         enemy_name, enemy_hp, hp)
+                return {"action": "attack",
+                        "data": {"targetId": target["id"], "targetType": "agent"},
+                        "reason": f"DEFENSIVE: Attacking {enemy_name} (HP={enemy_hp}) - advantage or finisher"}
+            else:
+                # Enemy stronger - FLEE immediately, don't waste turn attacking
+                log.warning("🚨 STRONGER ENEMY! %s (HP=%d, DMG=%d) > us (HP=%d, DMG=%d) — FLEE!",
+                           enemy_name, enemy_hp, enemy_dmg, hp, my_dmg)
+                safe = _find_safe_region_with_exit(connections, danger_ids, view)
+                if safe and ep >= move_ep_cost:
+                    return {"action": "move", "data": {"regionId": safe},
+                            "reason": f"FLEE: {enemy_name} stronger (HP={enemy_hp}, DMG={enemy_dmg})"}
 
     # ── Priority 5: Free actions (pickup, equip) ─────────────────
     # ONLY do free actions if NO enemies in same region!
