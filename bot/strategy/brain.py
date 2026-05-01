@@ -1363,10 +1363,21 @@ def _pickup_score(item: dict, inventory: list, heal_count: int) -> int:
 
 
 def _check_equip(inventory: list, equipped) -> dict | None:
-    """Auto-equip best weapon from inventory."""
+    """Auto-equip best weapon from inventory.
+    
+    IMPROVED: Now considers both ATK bonus AND weapon range.
+    Range is valuable for survivability (can attack from distance).
+    """
     current_bonus = get_weapon_bonus(equipped) if equipped else 0
+    current_range = get_weapon_range(equipped) if equipped else 0
     current_weapon = equipped.get("typeId", "fist") if equipped else "fist"
+    
+    # Calculate current weapon value score
+    # Range bonus: +10 per range level (range 2 = +20 value)
+    current_value = current_bonus + (current_range * 10)
+    
     best = None
+    best_value = current_value
     best_bonus = current_bonus
 
     for item in inventory:
@@ -1377,17 +1388,29 @@ def _check_equip(inventory: list, equipped) -> dict | None:
 
         if category == "weapon" or type_id in WEAPONS:
             bonus = WEAPONS.get(type_id, {}).get("bonus", 0)
-            log.debug("EQUIP_CHECK: %s (bonus=%d) vs current %s (bonus=%d)",
-                      type_id, bonus, current_weapon, current_bonus)
-            if bonus > best_bonus:
+            weapon_range = WEAPONS.get(type_id, {}).get("range", 0)
+            
+            # IMPROVED: Value = ATK bonus + (range * 10)
+            # This makes Sniper (28 + 20 = 48) > Katana (35 + 0 = 35)
+            value = bonus + (weapon_range * 10)
+            
+            log.debug("EQUIP_CHECK: %s (bonus=%d, range=%d, value=%d) vs current %s (bonus=%d, range=%d, value=%d)",
+                      type_id, bonus, weapon_range, value, current_weapon, current_bonus, current_range, current_value)
+            
+            if value > best_value:
                 best = item
+                best_value = value
                 best_bonus = bonus
 
     if best:
-        log.info("EQUIP: Switching from %s (+%d) to %s (+%d)",
-                 current_weapon, current_bonus, best.get("typeId", "weapon"), best_bonus)
+        best_weapon = best.get("typeId", "weapon")
+        best_range = WEAPONS.get(best_weapon, {}).get("range", 0)
+        log.info("EQUIP: Switching from %s (+%d, range=%d) to %s (+%d, range=%d) - value: %d > %d",
+                 current_weapon, current_bonus, current_range,
+                 best_weapon, best_bonus, best_range,
+                 best_value, current_value)
         return {"action": "equip", "data": {"itemId": best["id"]},
-                "reason": f"EQUIP: {best.get('typeId', 'weapon')} (+{best_bonus} ATK) vs {current_weapon} (+{current_bonus})"}
+                "reason": f"EQUIP: {best_weapon} (+{best_bonus} ATK, range={best_range}) vs {current_weapon} (+{current_bonus} ATK, range={current_range})"}
     return None
 
 
