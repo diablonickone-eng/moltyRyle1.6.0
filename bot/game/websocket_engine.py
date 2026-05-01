@@ -327,29 +327,41 @@ class WebSocketEngine:
             if event_type in ("agent_attacked", "combat", "attack", "damage_dealt"):
                 data = msg.get("data", {})
                 # Try to find attacker/target in data or top-level
-                attacker = data.get("attackerName") or data.get("attackerId") or msg.get("attackerId") or "?"
-                target = data.get("targetName") or data.get("targetId") or msg.get("targetId") or "?"
+                raw_attacker = data.get("attackerId") or msg.get("attackerId") or data.get("attackerName") or "?"
+                raw_target = data.get("targetId") or msg.get("targetId") or data.get("targetName") or "?"
                 damage = data.get("damage") or data.get("dmg") or msg.get("damage") or "?"
                 weapon = data.get("weaponName") or data.get("weaponType") or data.get("weaponId") or "?"
                 is_kill = data.get("isKill") or data.get("killed") or msg.get("isKill", False)
 
-                # Truncate IDs for readability if they are long
-                if len(attacker) > 16: attacker = f"ID:{attacker[:8]}"
-                if len(target) > 16: target = f"ID:{target[:8]}"
+                # Track with raw IDs (before truncation) for accurate matching
+                attacker_display = raw_attacker
+                target_display = raw_target
+                if len(attacker_display) > 16: attacker_display = f"ID:{raw_attacker[:8]}"
+                if len(target_display) > 16: target_display = f"ID:{raw_target[:8]}"
 
                 log.info("⚔️ COMBAT: %s → %s | DMG: %s | Weapon: %s%s", 
-                         attacker, target, damage, weapon, " (KILL!)" if is_kill else "")
+                         attacker_display, target_display, damage, weapon, " (KILL!)" if is_kill else "")
                 
                 # Track damage for self-learning stats
                 try:
                     dmg_val = int(damage) if isinstance(damage, (int, float, str)) and damage != "?" else 0
-                    is_me = self.dashboard_key in attacker or self.agent_id in attacker
-                    is_target_me = self.dashboard_key in target or self.agent_id in target
+                    # Check matching with full ID or truncated (first 8 chars)
+                    my_id = str(self.agent_id or "")
+                    my_key = str(self.dashboard_key or "")
+                    atk_str = str(raw_attacker)
+                    tgt_str = str(raw_target)
+                    
+                    is_me = (my_id and (my_id in atk_str or my_id[:8] in atk_str or atk_str in my_id)) or \
+                            (my_key and (my_key in atk_str or my_key[:8] in atk_str or atk_str in my_key))
+                    is_target_me = (my_id and (my_id in tgt_str or my_id[:8] in tgt_str or tgt_str in my_id)) or \
+                                   (my_key and (my_key in tgt_str or my_key[:8] in tgt_str or tgt_str in my_key))
                     
                     if is_me and dmg_val > 0:
                         self._game_stats["damage_dealt"] += dmg_val
+                        log.debug("💥 DAMAGE DEALT: %d | Total: %d", dmg_val, self._game_stats["damage_dealt"])
                     if is_target_me and dmg_val > 0:
                         self._game_stats["damage_taken"] += dmg_val
+                        log.debug("💔 DAMAGE TAKEN: %d | Total: %d", dmg_val, self._game_stats["damage_taken"])
                     if is_me and is_kill:
                         self._game_stats["kills"] += 1
                         log.info("🎯 KILL TRACKED! Total kills this game: %d", self._game_stats["kills"])
@@ -357,7 +369,7 @@ class WebSocketEngine:
                     log.debug("Failed to track combat stats: %s", e)
                 
                 # If everything is still ?, log raw for debugging
-                if attacker == "?" and target == "?":
+                if raw_attacker == "?" and raw_target == "?":
                     log.debug("DEBUG_COMBAT_RAW: %s", str(msg)[:200])
 
         # ── waiting ───────────────────────────────────────────────────
