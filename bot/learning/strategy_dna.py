@@ -165,6 +165,18 @@ class StrategyDNA:
             "damage_taken": int(_as_number(result.get("damage_taken", 0), 0)),
             "moltz_earned": int(_as_number(result.get("moltz_earned", 0), 0)),
             "dna_snapshot": sanitize_dna(result.get("dna_snapshot", self.dna)),
+            # NEW: Detailed analytics fields
+            "cause_of_death": result.get("cause_of_death"),
+            "time_of_death": result.get("time_of_death"),
+            "last_region_id": result.get("last_region_id"),
+            "items_used": result.get("items_used", []),
+            "heal_items_used": int(_as_number(result.get("heal_items_used", 0), 0)),
+            "weapon_switches": int(_as_number(result.get("weapon_switches", 0), 0)),
+            "facilities_used": result.get("facilities_used", []),
+            "peak_hp": int(_as_number(result.get("peak_hp", 100), 100)),
+            "lowest_hp": int(_as_number(result.get("lowest_hp", 100), 100)),
+            "total_moves": int(_as_number(result.get("total_moves", 0), 0)),
+            "total_rests": int(_as_number(result.get("total_rests", 0), 0)),
         }
         entry = {
             "timestamp": datetime.now().isoformat(),
@@ -184,59 +196,115 @@ class StrategyDNA:
         """
         Calculate fitness score for a match
         Higher = better strategy
+        
+        NEW: Includes moltz_earned (economic efficiency) and damage_taken (survival quality)
         """
         placement = _as_number(match.get("placement", 100), 100)
         kills = _as_number(match.get("kills", 0), 0)
         survival_time = _as_number(match.get("survival_time", 0), 0)
         damage_dealt = _as_number(match.get("damage_dealt", 0), 0)
+        damage_taken = _as_number(match.get("damage_taken", 0), 0)
+        moltz_earned = _as_number(match.get("moltz_earned", 0), 0)
         
-        # Fitness formula (tune weights based on goals)
+        # Base fitness formula
         fitness = (
             (101 - placement) * 10 +        # Placement (win = 1000 pts)
-            kills * 100 +                    # Kills (100 pts each)
-            survival_time * 0.5 +            # Survival (0.5 pts/sec)
-            damage_dealt * 0.1               # Damage (0.1 pts/dmg)
+            kills * 100 +                   # Kills (100 pts each)
+            survival_time * 0.5 +           # Survival (0.5 pts/sec)
+            damage_dealt * 0.1 +            # Damage dealt (0.1 pts/dmg)
+            moltz_earned * 0.5              # Moltz earned (0.5 pts/moltz - economic efficiency)
         )
-        return fitness
+        
+        # PENALTY for damage taken (inefficient trading)
+        # High damage_taken means bot took too much risk or traded poorly
+        damage_efficiency = damage_dealt / max(damage_taken, 1)  # Avoid div by zero
+        if damage_efficiency < 1.0:  # Took more damage than dealt
+            fitness -= (damage_taken - damage_dealt) * 0.05  # Penalty for bad trades
+        
+        return max(0, fitness)  # Ensure non-negative
     
     def _evolve(self):
         """
-        Genetic evolution - mutate DNA based on performance
+        Genetic evolution - improved algorithm with:
+        - 10-20 recent matches window
+        - Differential scoring (match-to-match improvement)
+        - Anti-outlier protection (requires consensus, not single outlier)
         """
-        # Get recent matches using current DNA
-        recent_matches = self.match_history[-10:]
+        # IMPROVED: Use last 10-20 matches for better statistical significance
+        MATCH_WINDOW = min(20, max(10, len(self.match_history) // 3))
+        recent_matches = self.match_history[-MATCH_WINDOW:]
         
-        if len(recent_matches) < 5:
-            return  # Not enough data
+        if len(recent_matches) < 10:
+            return  # Not enough data for reliable evolution
         
-        # Calculate average fitness
-        avg_fitness = sum(self.calculate_fitness(m) for m in recent_matches) / len(recent_matches)
+        # Calculate fitness for all recent matches
+        fitness_scores = [self.calculate_fitness(m) for m in recent_matches]
+        avg_fitness = sum(fitness_scores) / len(fitness_scores)
         
-        log.info("🧬 EVOLUTION: Generation %d | Avg Fitness: %.1f", self.generation, avg_fitness)
+        # ANTI-OUTLIER: Use median and std dev to detect outliers
+        sorted_fitness = sorted(fitness_scores)
+        median_fitness = sorted_fitness[len(sorted_fitness) // 2]
+        std_dev = (sum((f - avg_fitness) ** 2 for f in fitness_scores) / len(fitness_scores)) ** 0.5
         
-        # Get best performing match
-        best_match = max(recent_matches, key=self.calculate_fitness)
-        best_dna = sanitize_dna(best_match.get("dna_snapshot", self.dna))
+        log.info("🧬 EVOLUTION: Gen %d | Window=%d | Avg=%.1f | Median=%.1f | Std=%.1f",
+                 self.generation, MATCH_WINDOW, avg_fitness, median_fitness, std_dev)
         
-        # Compare with current and mutate if needed
-        if self.calculate_fitness(best_match) > avg_fitness * 1.2:
-            # Best match was significantly better - adopt its DNA
-            log.info("🧬 ADOPTING superior DNA from match with fitness %.1f", 
-                     self.calculate_fitness(best_match))
-            self.dna = best_dna.copy()
+        # DIFFERENTIAL: Compare with previous generation's performance
+        if len(self.match_history) > MATCH_WINDOW:
+            older_matches = self.match_history[-(MATCH_WINDOW*2):-MATCH_WINDOW]
+            older_fitness = [self.calculate_fitness(m) for m in older_matches]
+            older_avg = sum(older_fitness) / len(older_fitness)
+            improvement = avg_fitness - older_avg
+            log.info("🧬 DIFFERENTIAL: Previous gen avg=%.1f | Improvement=%+.1f", 
+                     older_avg, improvement)
         else:
-            # Random mutation to explore new strategies
-            self._mutate(avg_fitness)
+            improvement = 0
+        
+        # ANTI-OUTLIER: Only consider matches within 1.5 std dev of median
+        valid_matches = [
+            m for m, f in zip(recent_matches, fitness_scores)
+            if abs(f - median_fitness) <= 1.5 * std_dev
+        ]
+        
+        if len(valid_matches) >= 5:
+            # Use consensus from valid matches, not single outlier
+            valid_fitness = [self.calculate_fitness(m) for m in valid_matches]
+            valid_avg = sum(valid_fitness) / len(valid_fitness)
+            
+            # Get best match from VALID set only (not outlier)
+            best_valid = max(valid_matches, key=self.calculate_fitness)
+            best_fitness = self.calculate_fitness(best_valid)
+            
+            # Only adopt if significantly better than current AND improvement trend
+            if best_fitness > valid_avg * 1.15 and improvement >= -50:
+                best_dna = sanitize_dna(best_valid.get("dna_snapshot", self.dna))
+                log.info("🧬 CONSENSUS ADOPT: Best valid fitness=%.1f (avg=%.1f)", 
+                         best_fitness, valid_avg)
+                self.dna = best_dna.copy()
+            else:
+                # Guided mutation based on trend direction
+                if improvement < 0:
+                    # Declining performance - more aggressive mutation
+                    log.info("🧬 DECLINING - aggressive mutation needed")
+                    self._mutate(avg_fitness, aggressive=True)
+                else:
+                    # Stable or improving - conservative mutation
+                    self._mutate(avg_fitness, aggressive=False)
+        else:
+            log.info("🧬 INSUFFICIENT VALID MATCHES - skipping evolution")
         
         self.generation += 1
         self.save_dna()
     
-    def _mutate(self, current_fitness: float):
+    def _mutate(self, current_fitness: float, aggressive: bool = False):
         """
         Random mutation of DNA genes
+        
+        IMPROVED: Supports aggressive mode for declining performance
         """
-        mutation_rate = 0.1  # 10% chance per gene
-        mutation_strength = 0.2  # +/- 20% change
+        # Aggressive mode: higher rate and strength when performance declining
+        mutation_rate = 0.25 if aggressive else 0.1  # 25% vs 10% chance
+        mutation_strength = 0.35 if aggressive else 0.2  # +/- 35% vs 20%
         
         mutations = []
         
@@ -264,7 +332,10 @@ class StrategyDNA:
         self.dna = sanitize_dna(self.dna)
 
         if mutations:
-            log.info("🧬 MUTATIONS: %s", " | ".join(mutations))
+            mode_str = "AGGRESSIVE" if aggressive else "conservative"
+            log.info("🧬 %s MUTATIONS (%s): %s", mode_str.upper(), 
+                    f"rate={mutation_rate}, strength={mutation_strength}",
+                    " | ".join(mutations[:5]))  # Show max 5 mutations
         else:
             log.info("🧬 No mutations this generation")
     
@@ -306,8 +377,20 @@ def get_dna() -> StrategyDNA:
 
 
 def record_match(placement: int, kills: int, survival_time: int, 
-               damage_dealt: int, damage_taken: int, moltz: int = 0):
-    """Convenience function to record match result"""
+               damage_dealt: int, damage_taken: int, moltz: int = 0,
+               # NEW: Detailed analytics parameters
+               cause_of_death: str = None,
+               time_of_death = None,
+               last_region_id: str = None,
+               items_used: list = None,
+               heal_items_used: int = 0,
+               weapon_switches: int = 0,
+               facilities_used: list = None,
+               peak_hp: int = 100,
+               lowest_hp: int = 100,
+               total_moves: int = 0,
+               total_rests: int = 0):
+    """Convenience function to record match result with detailed analytics"""
     dna = get_dna()
     dna.record_match_result({
         "placement": placement,
@@ -316,7 +399,19 @@ def record_match(placement: int, kills: int, survival_time: int,
         "damage_dealt": damage_dealt,
         "damage_taken": damage_taken,
         "moltz_earned": moltz,
-        "dna_snapshot": dna.dna.copy()
+        "dna_snapshot": dna.dna.copy(),
+        # NEW: Detailed analytics
+        "cause_of_death": cause_of_death,
+        "time_of_death": time_of_death,
+        "last_region_id": last_region_id,
+        "items_used": items_used or [],
+        "heal_items_used": heal_items_used,
+        "weapon_switches": weapon_switches,
+        "facilities_used": facilities_used or [],
+        "peak_hp": peak_hp,
+        "lowest_hp": lowest_hp,
+        "total_moves": total_moves,
+        "total_rests": total_rests,
     })
 
 

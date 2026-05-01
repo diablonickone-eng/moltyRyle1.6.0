@@ -560,40 +560,56 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         "reason": f"OUTMATCHED FLEE: Enemy dmg={e_dmg} vs {my_dmg}, HP={hp}"}
 
     # ── Priority 4b: DEFENSIVE ATTACK (Musuh di region sama = bahaya!) ─────────────────
-    # HANYA serang jika musuh LEBIH LEMAH atau bisa FINISHER - jangan lawan musuh kuat!
-    # Jika musuh lebih kuat, lebih baik FLEE dulu daripada wasting turn attack yang kalah.
+    # HANYA serang jika musuh LEBIH LEMAH atau bisa FINISHER - gunakan comprehensive strength estimation
+    # Estimasi sekarang mencakup: weapon type, EP, dan heal item potential
     if enemies_here and has_weapon and hp >= 40 and ep >= COMBAT_MIN_EP:
         target = _select_weakest(enemies_here)
         if target:
-            enemy_hp = target.get("hp", 100)
+            # IMPROVED: Use comprehensive enemy strength estimation
+            enemy_strength = _estimate_enemy_strength(target)
+            enemy_hp = enemy_strength["hp"]
             enemy_name = target.get("name", "?")
-            enemy_atk = target.get("atk", 10)
-            enemy_def = target.get("def", 5)
             
-            # Calculate damage
-            enemy_weapon_bonus = _estimate_enemy_weapon_bonus(target)
-            my_dmg = calc_damage(atk, get_weapon_bonus(equipped), enemy_def, region_weather)
-            enemy_dmg = calc_damage(enemy_atk, enemy_weapon_bonus, defense, region_weather)
+            # Calculate damage using comprehensive stats
+            my_dmg = calc_damage(atk, get_weapon_bonus(equipped), enemy_strength["def"], region_weather)
+            enemy_dmg = calc_damage(enemy_strength["atk"], enemy_strength["weapon_bonus"], defense, region_weather)
             
-            # ONLY attack if we have advantage or can one-shot
-            can_one_shot = enemy_hp <= my_dmg
-            we_stronger = my_dmg > enemy_dmg and hp >= enemy_hp
-            is_finisher = enemy_hp < finisher_threshold
+            # IMPROVED: Consider effective HP (HP + heal potential) instead of raw HP
+            enemy_effective_hp = enemy_strength["effective_hp"]
+            threat_level = enemy_strength["threat_level"]
             
-            if can_one_shot or we_stronger or is_finisher:
-                log.info("⚔️ DEFENSIVE_ATTACK: %s in same region (HP=%d vs our %d) — attacking!", 
-                         enemy_name, enemy_hp, hp)
+            # ONLY attack if we have clear advantage or can one-shot
+            can_one_shot = enemy_effective_hp <= my_dmg  # Can kill even with heals
+            we_stronger = my_dmg > enemy_dmg * 1.2 and hp >= enemy_effective_hp * 0.8
+            is_finisher = enemy_hp < finisher_threshold  # Use raw HP for finisher check
+            
+            # IMPROVED: Consider EP advantage - if enemy has high EP, they can act more
+            ep_advantage = ep >= enemy_strength["ep"]
+            
+            log.info("🎯 ENEMY_ANALYSIS: %s | Threat=%d | EffectiveHP=%d | DMG=%d | EP=%d | Heals=%d | Wpn=%s",
+                     enemy_name, threat_level, enemy_effective_hp, enemy_dmg, 
+                     enemy_strength["ep"], enemy_strength["estimated_heals"], enemy_strength["weapon_type"])
+            
+            if (can_one_shot or we_stronger or is_finisher) and ep_advantage:
+                log.info("⚔️ DEFENSIVE_ATTACK: %s in same region (Threat=%d) — attacking!", 
+                         enemy_name, threat_level)
                 return {"action": "attack",
                         "data": {"targetId": target["id"], "targetType": "agent"},
-                        "reason": f"DEFENSIVE: Attacking {enemy_name} (HP={enemy_hp}) - advantage or finisher"}
+                        "reason": f"DEFENSIVE: Attacking {enemy_name} (threat={threat_level}, effHP={enemy_effective_hp})"}
             else:
-                # Enemy stronger - FLEE immediately, don't waste turn attacking
-                log.warning("🚨 STRONGER ENEMY! %s (HP=%d, DMG=%d) > us (HP=%d, DMG=%d) — FLEE!",
-                           enemy_name, enemy_hp, enemy_dmg, hp, my_dmg)
+                # Enemy stronger or has EP advantage - FLEE immediately
+                reason_detail = []
+                if not can_one_shot and not we_stronger and not is_finisher:
+                    reason_detail.append("stronger")
+                if not ep_advantage:
+                    reason_detail.append("EP disadvantage")
+                
+                log.warning("🚨 STRONGER ENEMY! %s (Threat=%d, EffHP=%d, DMG=%d, EP=%d) > us — FLEE!",
+                           enemy_name, threat_level, enemy_effective_hp, enemy_dmg, enemy_strength["ep"])
                 safe = _find_safe_region_with_exit(connections, danger_ids, view)
                 if safe and ep >= move_ep_cost:
                     return {"action": "move", "data": {"regionId": safe},
-                            "reason": f"FLEE: {enemy_name} stronger (HP={enemy_hp}, DMG={enemy_dmg})"}
+                            "reason": f"FLEE: {enemy_name} threat={threat_level} ({', '.join(reason_detail)})"}
 
     # ── Priority 5: Free actions (pickup, equip) ─────────────────
     # ONLY do free actions if NO enemies in same region!
@@ -1003,6 +1019,98 @@ def _estimate_enemy_weapon_bonus(agent: dict) -> int:
         return 0
     type_id = weapon.get("typeId", "").lower() if isinstance(weapon, dict) else ""
     return WEAPONS.get(type_id, {}).get("bonus", 0)
+
+
+def _estimate_enemy_strength(agent: dict) -> dict:
+    """
+    Comprehensive enemy strength estimation.
+    
+    Returns dict with:
+    - weapon_bonus: ATK bonus from weapon
+    - weapon_range: Range of weapon (0=melee, 1+=ranged)
+    - weapon_type: Weapon typeId
+    - ep: Enemy EP (action points available)
+    - estimated_heals: Estimated healing items (based on inventory hints)
+    - effective_hp: HP + estimated heal potential
+    - threat_level: 0-100 (higher = more dangerous)
+    """
+    # Basic stats
+    hp = agent.get("hp", 100)
+    ep = agent.get("ep", 10)
+    atk = agent.get("atk", 10)
+    defense = agent.get("def", 5)
+    
+    # Weapon analysis
+    weapon = agent.get("equippedWeapon")
+    weapon_type = "fist"
+    weapon_bonus = 0
+    weapon_range = 0
+    
+    if weapon:
+        if isinstance(weapon, dict):
+            weapon_type = weapon.get("typeId", "").lower()
+        elif isinstance(weapon, str):
+            weapon_type = weapon.lower()
+        weapon_bonus = WEAPONS.get(weapon_type, {}).get("bonus", 0)
+        weapon_range = WEAPONS.get(weapon_type, {}).get("range", 0)
+    
+    # Estimate healing items from inventory (if visible) or default assumptions
+    inventory = agent.get("inventory", [])
+    estimated_heals = 0
+    heal_potential = 0
+    
+    if inventory and isinstance(inventory, list):
+        for item in inventory:
+            if isinstance(item, dict):
+                item_type = item.get("typeId", "").lower()
+                if item_type in RECOVERY_ITEMS:
+                    estimated_heals += 1
+                    heal_potential += RECOVERY_ITEMS[item_type]
+    else:
+        # No inventory visibility - assume average player has 1-2 heals mid/late game
+        estimated_heals = 1 if hp > 50 else 0
+        heal_potential = estimated_heals * 25  # Average 25 HP per heal
+    
+    # Effective HP = current HP + potential heal
+    effective_hp = hp + heal_potential
+    
+    # Calculate threat level (0-100)
+    threat_level = 0
+    
+    # Base threat from HP
+    threat_level += min(30, hp / 3.3)  # Full HP = 30 pts
+    
+    # Weapon threat (katana/sniper = high threat)
+    if weapon_type in ("katana", "sniper"):
+        threat_level += 25
+    elif weapon_type in ("sword", "pistol"):
+        threat_level += 15
+    elif weapon_type in ("dagger", "bow"):
+        threat_level += 8
+    
+    # EP threat (high EP = can act more)
+    threat_level += min(20, ep * 2)  # 10 EP = 20 pts
+    
+    # Heal potential threat (sustainability)
+    threat_level += min(15, estimated_heals * 5)  # 3 heals = 15 pts
+    
+    # Ranged weapons extra threat (can't kite them easily)
+    if weapon_range >= 1:
+        threat_level += 10
+    
+    return {
+        "weapon_bonus": weapon_bonus,
+        "weapon_range": weapon_range,
+        "weapon_type": weapon_type,
+        "ep": ep,
+        "estimated_heals": estimated_heals,
+        "heal_potential": heal_potential,
+        "effective_hp": effective_hp,
+        "threat_level": min(100, threat_level),
+        "atk": atk,
+        "def": defense,
+        "hp": hp,
+    }
 
 
 def _get_adjacent_ids(region_obj, visible_regions: list = None) -> list:
@@ -1602,8 +1710,13 @@ def _choose_move_target(connections, danger_ids: set,
     healing_count = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS]) if inventory else 0
     is_ready_for_war = has_weapon and healing_count >= 1 and my_hp >= 60
     is_late_game = alive_count <= 25
-    visited_penalty = 20 if is_late_game else 60
-    new_region_bonus = 20 if is_late_game else 45
+    is_endgame = alive_count <= 10
+    
+    # IMPROVED: Safe exit route priority - reduce exploration bonus when low HP
+    # Safety matters more than new regions when vulnerable
+    hp_ratio = my_hp / 100
+    visited_penalty = 20 if is_late_game else max(20, int(60 * hp_ratio))  # Less penalty when HP low
+    new_region_bonus = 20 if is_late_game else max(10, int(45 * hp_ratio))  # Less bonus when HP low
 
     # Build region item attractiveness scores
     item_region_scores = {}
@@ -1780,16 +1893,54 @@ def _choose_move_target(connections, danger_ids: set,
                 else:
                     score -= enemy_count * 15  # Stronger penalty for unknown danger
 
-            # 5. EXPLORATION vs BACKTRACKING
+            # 5. EXPLORATION vs BACKTRACKING vs SAFE EXIT
+            # IMPROVED: Safe exit routes more important than "new region" when HP low
+            conns = conn.get("connections", []) if isinstance(conn, dict) else []
+            exit_options = len(conns)
+            
             if rid in _visited_regions:
                 score -= visited_penalty
             else:
                 score += new_region_bonus
+            
+            # IMPROVED: Bonus for regions with more exit options (safe retreat)
+            if my_hp < 50 or is_late_game:
+                # When vulnerable, prioritize regions with multiple exits
+                exit_bonus = exit_options * 8  # Up to +24 for 3 exits
+                score += exit_bonus
+                if exit_bonus > 0:
+                    log.debug("SAFE_EXIT: %s has %d exits, bonus=%d", rid[:8], exit_options, exit_bonus)
+            else:
+                # Normal mode: moderate bonus for exits
+                score += exit_options * 3
 
-            # 6. GUARDIAN HUNTING
+            # 6. GUARDIAN HUNTING & CENTER POSITIONING
             if rid in _guardian_locations: score += 15
-            if _map_knowledge.get("revealed") and rid in _map_knowledge.get("safe_center", []):
-                score += 5
+            
+            # IMPROVED: Late game center vs edge strategy
+            is_in_center = (_map_knowledge.get("revealed") and 
+                           rid in _map_knowledge.get("safe_center", []))
+            
+            if is_in_center:
+                if is_endgame:
+                    # Endgame: CENTER is crucial - more connections, harder to be trapped
+                    score += 40  # Strong center bias
+                    log.debug("ENDGAME_CENTER: %s is center region, +40", rid[:8])
+                elif is_late_game:
+                    # Late game: prefer center for better positioning
+                    score += 20
+                else:
+                    # Early/mid: moderate center preference
+                    score += 5
+            elif is_late_game and _map_knowledge.get("revealed"):
+                # Late game: EDGE regions are riskier (easier to be trapped by DZ)
+                # Check if this edge region has good escape routes
+                if exit_options <= 1:
+                    score -= 25  # Dead end in late game = dangerous
+                    log.warning("EDGE_DEADEND: %s is edge with %d exits, -25", rid[:8], exit_options)
+                else:
+                    score -= 5  # Slight edge penalty
+            
             if rid in _map_knowledge.get("death_zones", set()):
                 continue  # HARD BLOCK
 

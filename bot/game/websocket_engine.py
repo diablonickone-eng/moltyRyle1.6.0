@@ -86,6 +86,18 @@ class WebSocketEngine:
             "damage_dealt": 0,
             "damage_taken": 0,
             "moltz": 0,
+            # NEW: Detailed analytics tracking
+            "cause_of_death": None,  # e.g., "combat", "death_zone", "starvation"
+            "time_of_death": None,   # Turn number when died
+            "last_region_id": None,  # Region where bot died
+            "items_used": [],        # List of {typeId, turn, reason}
+            "heal_items_used": 0,    # Count of healing items consumed
+            "weapon_switches": 0,    # Number of weapon equips
+            "facilities_used": [],   # List of facilities interacted with
+            "peak_hp": 100,          # Highest HP achieved
+            "lowest_hp": 100,        # Lowest HP survived
+            "total_moves": 0,        # Number of move actions
+            "total_rests": 0,        # Number of rest actions
         }
 
     async def run(self, existing_ws=None) -> dict:
@@ -302,16 +314,30 @@ class WebSocketEngine:
                 damage_taken = get_val("damageTaken", "damage_taken", default=0)
                 moltz = get_val("moltz", default=0)
                 
+                # NEW: Record match with detailed analytics
                 record_match(
                     placement=placement,
                     kills=kills,
                     survival_time=survival_time,
                     damage_dealt=damage_dealt,
                     damage_taken=damage_taken,
-                    moltz=moltz
+                    moltz=moltz,
+                    # NEW: Detailed analytics
+                    cause_of_death=self._game_stats.get("cause_of_death"),
+                    time_of_death=self._game_stats.get("time_of_death"),
+                    last_region_id=self._game_stats.get("last_region_id"),
+                    items_used=self._game_stats.get("items_used", []),
+                    heal_items_used=self._game_stats.get("heal_items_used", 0),
+                    weapon_switches=self._game_stats.get("weapon_switches", 0),
+                    facilities_used=self._game_stats.get("facilities_used", []),
+                    peak_hp=self._game_stats.get("peak_hp", 100),
+                    lowest_hp=self._game_stats.get("lowest_hp", 100),
+                    total_moves=self._game_stats.get("total_moves", 0),
+                    total_rests=self._game_stats.get("total_rests", 0),
                 )
-                log.info("🧬 MATCH RECORDED | Placement: %d | Kills: %d | DMG Dealt: %d | DMG Taken: %d | Survived: %ds",
-                         placement, kills, damage_dealt, damage_taken, survival_time)
+                log.info("🧬 MATCH RECORDED | Placement: %d | Kills: %d | DMG: %d/%d | Survived: %ds | Death: %s",
+                         placement, kills, damage_dealt, damage_taken, survival_time,
+                         self._game_stats.get("cause_of_death", "survived"))
             except Exception as e:
                 log.warning("Failed to record match: %s", e)
             reset_game_state()  # Clear curse tracking for next game
@@ -409,6 +435,27 @@ class WebSocketEngine:
 
         if not self_data.get("isAlive", True):
             log.info("[DEAD] Agent DEAD — Alive remaining: %s. Waiting for game_ended...", alive_count)
+            
+            # NEW: Track death analytics
+            region = view.get("currentRegion", {})
+            region_id = region.get("id", "unknown") if isinstance(region, dict) else "unknown"
+            region_name = region.get("name", "unknown") if isinstance(region, dict) else "unknown"
+            
+            self._game_stats["last_region_id"] = region_id
+            self._game_stats["time_of_death"] = view.get("turn", "?")
+            
+            # Determine cause of death
+            if region.get("isDeathZone"):
+                self._game_stats["cause_of_death"] = "death_zone"
+            elif self._game_stats["damage_taken"] > 50 and self._game_stats["lowest_hp"] <= 0:
+                self._game_stats["cause_of_death"] = "combat"
+            else:
+                self._game_stats["cause_of_death"] = "unknown"
+            
+            log.info("[DEATH_ANALYTICS] Cause: %s | Region: %s | Turn: %s | Lowest HP: %d",
+                     self._game_stats["cause_of_death"], region_name,
+                     self._game_stats["time_of_death"], self._game_stats["lowest_hp"])
+            
             # Update dashboard with dead state (don't just return silently!)
             dk = self.dashboard_key
             dashboard_state.update_agent(dk, {
@@ -419,12 +466,12 @@ class WebSocketEngine:
                 "maxHp": self_data.get("maxHp", 100),
                 "maxEp": self_data.get("maxEp", 10),
                 "alive_count": alive_count,
-                "last_action": "☠️ DEAD — waiting for game to end",
+                "last_action": f"☠️ DEAD ({self._game_stats['cause_of_death']}) — waiting for game to end",
                 "enemies": [],
                 "region_items": [],
             })
             dashboard_state.add_log(
-                f"☠️ Agent DEAD — Alive remaining: {alive_count}",
+                f"☠️ Agent DEAD ({self._game_stats['cause_of_death']}) — Alive remaining: {alive_count}",
                 "warning", dk
             )
             return
@@ -434,6 +481,12 @@ class WebSocketEngine:
         ep = self_data.get("ep", "?")
         region = view.get("currentRegion", {})
         region_name = region.get("name", "?") if isinstance(region, dict) else "?"
+        
+        # NEW: Track HP analytics
+        if isinstance(hp, (int, float)):
+            self._game_stats["peak_hp"] = max(self._game_stats["peak_hp"], hp)
+            self._game_stats["lowest_hp"] = min(self._game_stats["lowest_hp"], hp)
+        
         log.info("Status: HP=%s EP=%s Region=%s | Alive: %s", hp, ep, region_name, alive_count)
         dashboard_state.add_log(
             f"HP={hp} EP={ep} Region={region_name} | Alive: {alive_count}",
@@ -578,6 +631,9 @@ class WebSocketEngine:
         await self._send(payload)
         log.info("→ %s | %s", action_type.upper(), reason)
         
+        # NEW: Track action analytics
+        self._track_action_analytics(action_type, action_data, reason)
+        
         # Store for failure tracking
         self.last_sent_action = {
             "type": action_type,
@@ -588,6 +644,56 @@ class WebSocketEngine:
         # Feed dashboard with action
         dashboard_state.update_agent(self.dashboard_key, {"last_action": f"{action_type}: {reason[:60]}"})
         dashboard_state.add_log(f"{action_type}: {reason[:80]}", "info", self.dashboard_key)
+    
+    def _track_action_analytics(self, action_type: str, action_data: dict, reason: str):
+        """Track detailed action analytics for post-match analysis."""
+        
+        # Track move actions
+        if action_type == "move":
+            self._game_stats["total_moves"] += 1
+        
+        # Track rest actions
+        elif action_type == "rest":
+            self._game_stats["total_rests"] += 1
+        
+        # Track item usage (healing, weapons, etc.)
+        elif action_type == "use_item":
+            item_id = action_data.get("itemId", "unknown")
+            # Categorize item type from reason or itemId
+            item_type = "unknown"
+            if any(h in reason.lower() for h in ["heal", "medkit", "bandage", "food"]):
+                item_type = "healing"
+                self._game_stats["heal_items_used"] += 1
+            elif any(w in reason.lower() for w in ["weapon", "equip"]):
+                item_type = "weapon"
+            
+            self._game_stats["items_used"].append({
+                "typeId": item_id,
+                "category": item_type,
+                "reason": reason[:50],
+                "timestamp": time.time()
+            })
+        
+        # Track weapon equips
+        elif action_type == "equip":
+            self._game_stats["weapon_switches"] += 1
+        
+        # Track facility usage
+        elif action_type == "interact":
+            facility_id = action_data.get("interactableId", "unknown")
+            facility_type = "unknown"
+            if "medical" in reason.lower():
+                facility_type = "medical_facility"
+            elif "supply" in reason.lower():
+                facility_type = "supply_cache"
+            elif "watchtower" in reason.lower():
+                facility_type = "watchtower"
+            
+            self._game_stats["facilities_used"].append({
+                "interactableId": facility_id,
+                "type": facility_type,
+                "reason": reason[:50]
+            })
 
     async def _send(self, payload: dict):
         """Send a message through WebSocket with rate limiting."""
