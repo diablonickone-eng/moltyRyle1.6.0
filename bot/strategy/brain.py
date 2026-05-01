@@ -578,7 +578,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # ONLY do free actions if NO enemies in same region!
     if not enemies_here:  # Safe to loot/interact
         # Moderate healing in safe area
-        heal_action = _moderate_heal_in_safe_area(hp, maxHp, inventory, healing_count, enemies_here, region_id)
+        heal_action = _moderate_heal_in_safe_area(hp, inventory, healing_count, enemies_here, region_id)
         if heal_action:
             return heal_action
         
@@ -1303,6 +1303,22 @@ def _find_healing_item(inventory: list, critical: bool = False) -> dict | None:
         # Normal: use smallest heal first (Emergency Food first, save big heals)
         heals.sort(key=lambda i: RECOVERY_ITEMS.get(i.get("typeId", "").lower(), 0))
     return heals[0]
+
+
+def _moderate_heal_in_safe_area(hp: int, inventory: list, healing_count: int, enemies_here: list, region_id: str) -> dict | None:
+    """Moderate healing when in safe area (no enemies present).
+    Returns healing action if HP is below moderate threshold and healing items available.
+    """
+    if hp >= HP_MODERATE_THRESHOLD:
+        return None
+    if not healing_count:
+        return None
+    # Find a healing item (non-critical, use small heals first)
+    heal = _find_healing_item(inventory, critical=False)
+    if heal:
+        return {"action": "use_item", "data": {"itemId": heal["id"]},
+                "reason": f"MODERATE HEAL: HP={hp}<{HP_MODERATE_THRESHOLD}, safe area, using {heal.get('typeId', 'heal')}"}
+    return None
 
 
 def _find_energy_drink(inventory: list) -> dict | None:
