@@ -737,35 +737,55 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         "reason": f"PREDATOR: Hunting {target['agent'].get('name','?')} "
                                   f"(W={w_type} Heal={healing_count})"}
             
-            # CHASE MODE: If enemy is nearby but out of range, move toward them
+            # CHASE MODE: Only for MELEE weapons!
+            # Ranged weapons should NOT chase - they can shoot from adjacent
             enemy_rid = target["agent"].get("regionId")
             enemy_hp = target["agent"].get("hp", 100)
-            # AGGRESSIVE: Chase if enemy is weak (<50 HP) or we have advantage
-            should_chase = (enemy_hp < 50 or  # Weak enemy
-                           (is_ready_for_war and enemy_hp < 70) or  # We are strong
-                           target.get("one_shot", False))  # Can one-shot
-            if should_chase and enemy_rid and enemy_rid != region_id:
-                # Check if this region is one of our connections
-                if any(_get_region_id(c) == enemy_rid for c in connections):
-                    log.info("🏃 CHASE_MODE: Pursuing %s (HP=%d) to %s", 
-                             target['agent'].get('name','?'), enemy_hp, enemy_rid[:8])
-                    _track_chase()
-                    return {"action": "move", "data": {"regionId": enemy_rid},
-                            "reason": f"CHASE: Hunting weak {target['agent'].get('name','?')} (HP={enemy_hp})"}
+            
+            # RANGED: Don't chase, just shoot from here!
+            if w_range >= 1 and enemy_rid and enemy_rid != region_id:
+                # Enemy in adjacent region = we can shoot them!
+                log.info("🏹 RANGED_HOLD: Shooting %s (HP=%d) from safe distance", 
+                         target['agent'].get('name','?'), enemy_hp)
+                return {"action": "attack",
+                        "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
+                        "reason": f"RANGED: Shooting {target['agent'].get('name','?')} from adjacent region"}
+            
+            # MELEE CHASE: Only if we have melee weapon and enemy is weak
+            if w_range == 0:
+                should_chase = (enemy_hp < 50 or  # Weak enemy
+                               (is_ready_for_war and enemy_hp < 70) or  # We are strong
+                               target.get("one_shot", False))  # Can one-shot
+                if should_chase and enemy_rid and enemy_rid != region_id:
+                    if any(_get_region_id(c) == enemy_rid for c in connections):
+                        log.info("🏃 MELEE_CHASE: Pursuing %s (HP=%d) to %s", 
+                                 target['agent'].get('name','?'), enemy_hp, enemy_rid[:8])
+                        _track_chase()
+                        return {"action": "move", "data": {"regionId": enemy_rid},
+                                "reason": f"CHASE: Hunting weak {target['agent'].get('name','?')} (HP={enemy_hp})"}
 
-    # ── AGGRESSIVE CHASE: Pursue ANY weak enemy (finisher) even not in optimal range ──
-    # Kalau ada musuh lemah di adjacent region, kejar meskipun belum "optimal"
+    # ── AGGRESSIVE CHASE: Only for MELEE! Ranged shoots from distance ──
+    # Kalau ada musuh lemah di adjacent region
     if finisher_targets and ep >= move_ep_cost and hp >= 30:
         for target in finisher_targets:
             target_rid = target.get("regionId")
             if target_rid and target_rid != region_id:
                 if any(_get_region_id(c) == target_rid for c in connections):
                     if target_rid not in danger_ids:
-                        log.info("🏃 FINISHER_CHASE: Aggressive pursuit of %s (HP=%d) to %s",
-                                 target.get('name','?'), target.get('hp', '?'), target_rid[:8])
-                        _track_chase()
-                        return {"action": "move", "data": {"regionId": target_rid},
-                                "reason": f"FINISHER CHASE: Pursuing weak {target.get('name','?')} (HP={target.get('hp')})"}
+                        # RANGED: Shoot finisher dari tempat, jangan chase!
+                        if w_range >= 1:
+                            log.info("� RANGED_FINISHER_SHOT: Shooting weak %s (HP=%d) from adjacent",
+                                     target.get('name','?'), target.get('hp', '?'))
+                            return {"action": "attack",
+                                    "data": {"targetId": target["id"], "targetType": "agent"},
+                                    "reason": f"RANGED FINISHER: Shooting weak {target.get('name','?')} from safe distance"}
+                        # MELEE: Chase untuk finisher
+                        elif w_range == 0:
+                            log.info("🏃 MELEE_FINISHER_CHASE: Pursuing %s (HP=%d) to %s",
+                                     target.get('name','?'), target.get('hp', '?'), target_rid[:8])
+                            _track_chase()
+                            return {"action": "move", "data": {"regionId": target_rid},
+                                    "reason": f"FINISHER CHASE: Pursuing weak {target.get('name','?')} (HP={target.get('hp')})"}
                 
     # ── Priority 8: Guardian farming (120 sMoltz per kill!) ────────
     # Only farm if: HP is safe + we can win the fight + EP budget for chase
