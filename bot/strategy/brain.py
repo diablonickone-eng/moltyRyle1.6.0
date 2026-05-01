@@ -472,6 +472,42 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     else:  # balanced
         outnumbered_threshold = 3 if has_weapon else 2
     
+    # DETEKSI CLAN/PARTY: 2 metode - name pattern + behavior
+    # Method 1: Name pattern (prefix/suffix sama)
+    def _extract_clan_tag(name):
+        if not name or '_' not in name:
+            return None
+        return name.split('_')[0] if '_' in name else None
+    
+    clan_counts = {}
+    for enemy in visible_agents:
+        if enemy.get("isAlive") and not enemy.get("isGuardian"):
+            clan = _extract_clan_tag(enemy.get("name", ""))
+            if clan:
+                clan_counts[clan] = clan_counts.get(clan, 0) + 1
+    
+    dominant_clan = max(clan_counts, key=clan_counts.get) if clan_counts else None
+    dominant_count = clan_counts.get(dominant_clan, 0) if dominant_clan else 0
+    
+    # Method 2: Behavior-based (high concentration = suspected party)
+    # Jika 4+ musuh di region sama, anggap potential party (even beda nama)
+    enemy_count = len(enemies_here)
+    suspected_party = (enemy_count >= 4) or (dominant_count >= 3 and dominant_clan)
+    
+    if suspected_party:
+        if dominant_count >= 3 and dominant_clan:
+            log.warning("🚨 CLAN/PARTY DETECTED: '%s_' x%d enemies! Coordinated group!", 
+                       dominant_clan, dominant_count)
+            reason = f"CLAN FLEE: Coordinated group '{dominant_clan}_' x{dominant_count}!"
+        else:
+            log.warning("🚨 SUSPECTED PARTY: %d enemies in region, possible coordination!", enemy_count)
+            reason = f"SUSPECTED PARTY: {enemy_count} enemies, too dangerous!"
+        
+        # Force flee regardless of mode - 1 vs party = suicide
+        safe = _find_safe_region_with_exit(connections, danger_ids, view)
+        if safe and ep >= move_ep_cost:
+            return {"action": "move", "data": {"regionId": safe}, "reason": reason}
+    
     guardians_here = [a for a in visible_agents
                       if a.get("isGuardian", False) and a.get("isAlive", True)
                       and a.get("regionId") == region_id]
