@@ -872,19 +872,36 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     "reason": f"HEAL: HP={hp}, area safe, using {heal.get('typeId', 'heal')}"}
 
     # ── Priority 8: Facility interaction ──────────────────────────
-    if interactables and ep >= 2 and not region.get("isDeathZone"):
+    # Facility interact EP cost = 1 (per game-guide.md)
+    if interactables and ep >= 1 and not region.get("isDeathZone"):
         facility = _select_facility(interactables, hp, ep, inventory)
         if facility:
             return {"action": "interact",
                     "data": {"interactableId": facility["id"]},
                     "reason": f"FACILITY: {facility.get('type', 'unknown')}"}
 
-    # ── Priority 8b: FACILITY CAMPING (Stay and rest if low) ───────
-    # If we are at a Medical Facility or Supply Cache and HP < 70 or EP < 8,
-    # stay and rest instead of moving.
-    has_camp_facility = any(f.get("type", "").lower() in ("medical_facility", "supply_cache")
-                            for f in interactables if isinstance(f, dict))
-    if has_camp_facility and (hp < 70 or ep < 8) and not items_here and not guardians_here:
+    # ── Priority 8b: FACILITY CAMPING (Stay and use facility if low) ───────
+    # If HP is critically low, MUST use medical facility for healing, not just rest!
+    has_medical = any(f.get("type", "").lower() == "medical_facility" and not f.get("isUsed")
+                      for f in interactables if isinstance(f, dict))
+    has_supply = any(f.get("type", "").lower() == "supply_cache" and not f.get("isUsed")
+                     for f in interactables if isinstance(f, dict))
+    
+    # CRITICAL: If HP low and medical facility available, USE IT immediately!
+    # Medical facility: EP cost = 1, restores some HP, NOT reusable (isUsed check)
+    if has_medical and hp < HP_CRITICAL_THRESHOLD and ep >= 1:
+        medical_fac = next((f for f in interactables 
+                            if isinstance(f, dict) 
+                            and f.get("type", "").lower() == "medical_facility"
+                            and not f.get("isUsed")), None)
+        if medical_fac:
+            log.warning("🚨 CRITICAL HEAL at medical facility — HP=%d, using facility NOW!", hp)
+            return {"action": "interact",
+                    "data": {"interactableId": medical_fac["id"]},
+                    "reason": f"CRITICAL_HEAL: Using medical facility (HP={hp})"}
+    
+    # Moderate HP: camp and rest at facility
+    if (has_medical or has_supply) and (hp < 70 or ep < 8) and not items_here and not guardians_here:
         log.info("🏕️ Camping at facility — HP=%d EP=%d, resting to recover...", hp, ep)
         return {"action": "rest", "data": {},
                 "reason": f"CAMPING: Resting at facility to recover (HP={hp} EP={ep})"}
