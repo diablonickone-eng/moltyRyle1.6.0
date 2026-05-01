@@ -286,30 +286,32 @@ class WebSocketEngine:
                 self_data = data.get("self") or result.get("self") or msg.get("self") or {}
                 if not isinstance(self_data, dict):
                     self_data = {}
-                placement = (
-                    self_data.get("placement")
-                    or self_data.get("finalRank")
-                    or data.get("placement")
-                    or data.get("finalRank")
-                    or result.get("placement")
-                    or result.get("finalRank")
-                    or 100
-                )
-                kills = (
-                    self_data.get("kills")
-                    or data.get("kills")
-                    or result.get("kills")
-                    or self._game_stats["kills"]
-                )
+                # Helper to get value with 0 being valid (not falsy)
+                def get_val(*keys, default=None, sources=[self_data, data, result, self._game_stats]):
+                    for src in sources:
+                        if not isinstance(src, dict):
+                            continue
+                        for key in keys:
+                            if key in src and src[key] is not None:
+                                return src[key]
+                    return default
+                
+                placement = get_val("placement", "finalRank", default=100)
+                kills = get_val("kills", default=self._game_stats["kills"])
+                damage_dealt = get_val("damageDealt", "damage_dealt", default=0)
+                damage_taken = get_val("damageTaken", "damage_taken", default=0)
+                moltz = get_val("moltz", default=0)
+                
                 record_match(
                     placement=placement,
                     kills=kills,
                     survival_time=survival_time,
-                    damage_dealt=self_data.get("damageDealt", result.get("damageDealt", self._game_stats["damage_dealt"])),
-                    damage_taken=self_data.get("damageTaken", result.get("damageTaken", self._game_stats["damage_taken"])),
-                    moltz=self_data.get("moltz", result.get("moltz", self._game_stats["moltz"]))
+                    damage_dealt=damage_dealt,
+                    damage_taken=damage_taken,
+                    moltz=moltz
                 )
-                log.info("🧬 MATCH RECORDED for evolution | Survived: %ds", survival_time)
+                log.info("🧬 MATCH RECORDED | Placement: %d | Kills: %d | DMG Dealt: %d | DMG Taken: %d | Survived: %ds",
+                         placement, kills, damage_dealt, damage_taken, survival_time)
             except Exception as e:
                 log.warning("Failed to record match: %s", e)
             reset_game_state()  # Clear curse tracking for next game
