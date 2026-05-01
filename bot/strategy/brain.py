@@ -385,8 +385,17 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
              is_ready_for_war, w_type or "fist")
 
     # Survival gate: do not let old/overfit DNA make the bot fight at reckless HP.
+    # Mode-based minimum HP for combat
+    aggression = AGGRESSION_LEVEL.lower() if AGGRESSION_LEVEL else "balanced"
+    if aggression == "aggressive":
+        mode_hp_min = 35  # Combat mode: bisa bertarung lebih awal
+    elif aggression == "passive":
+        mode_hp_min = 60  # Survive mode: tunggu HP tinggi
+    else:
+        mode_hp_min = 50  # Balanced
+    
     phase_floor = 35 if alive_count <= 10 else (45 if alive_count <= 25 else 50)
-    combat_hp_floor = max(strategy["combat_hp_threshold"], phase_floor)
+    combat_hp_floor = max(strategy["combat_hp_threshold"], phase_floor, mode_hp_min)
     can_afford_combat = hp >= combat_hp_floor or (
         hp >= _get_combat_hp_threshold(alive_count, equipped) and is_ready_for_war
     )
@@ -455,22 +464,41 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # (was: _check_curse → whisper answer to guardian)
 
     # ── Priority 2b: Threat evasion (guardians + strong enemies + OUTNUMBERED) ───
-    # Enemies list already pre-calculated at start of function
+    # Outnumbered thresholds per mode (aggression sudah didefine di atas)
+    if aggression == "aggressive":
+        outnumbered_threshold = 4 if has_weapon else 3  # Combat: tahan 3-4 musuh
+    elif aggression == "passive":
+        outnumbered_threshold = 2 if has_weapon else 1  # Survive: kabur dari 1-2 musuh
+    else:  # balanced
+        outnumbered_threshold = 3 if has_weapon else 2
+    
     guardians_here = [a for a in visible_agents
                       if a.get("isGuardian", False) and a.get("isAlive", True)
                       and a.get("regionId") == region_id]
     # enemies_here sudah didefinisikan di atas dengan benar (termasuk yang tanpa regionId)
 
-    # EMERGENCY: Flee if OUTNUMBERED (3+ enemies vs 1, or 2+ with no weapon)
+    # EMERGENCY: Flee if OUTNUMBERED (mode-dependent)
     enemy_count = len(enemies_here)
-    outnumbered_threshold = 2 if not has_weapon else 3  # No weapon = flee at 2 enemies
     if enemy_count >= outnumbered_threshold and ep >= move_ep_cost:
         safe = _find_safe_region_with_exit(connections, danger_ids, view)
         if safe:
-            log.warning("🚨 OUTNUMBERED! %d enemies vs 1, no weapon=%s — FLEEING!", 
-                       enemy_count, not has_weapon)
+            log.warning("🚨 OUTNUMBERED! %d enemies vs 1, mode=%s, threshold=%d — FLEEING!", 
+                       enemy_count, aggression, outnumbered_threshold)
             return {"action": "move", "data": {"regionId": safe},
-                    "reason": f"OUTNUMBERED FLEE: {enemy_count} enemies vs 1, too dangerous!"}
+                    "reason": f"OUTNUMBERED FLEE: {enemy_count} enemies vs 1 (mode={aggression})"}
+    
+    # AGGRESSIVE CHASE: In combat mode, pursue enemies even if slightly risky
+    if aggression == "aggressive" and enemies_here and has_weapon and hp >= 40:
+        # Cari musuh terdekat yang bisa dikejar
+        for enemy in enemies_here:
+            enemy_rid = enemy.get("regionId")
+            if enemy_rid and enemy_rid != region_id:
+                if any(_get_region_id(c) == enemy_rid for c in connections):
+                    if enemy_rid not in danger_ids:
+                        log.info("⚔️ AGGRESSIVE_CHASE: Pursuing %s to %s (HP=%d)", 
+                                 enemy.get('name','?'), enemy_rid[:8], enemy.get('hp', '?'))
+                        return {"action": "move", "data": {"regionId": enemy_rid},
+                                "reason": f"AGGRESSIVE CHASE: Hunting {enemy.get('name','?')}"}
 
     # Flee from guardians when HP low (with retreat path planning)
     if guardians_here and hp < GUARDIAN_FARM_MIN_HP and ep >= move_ep_cost:
@@ -481,7 +509,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     "reason": f"GUARDIAN FLEE: HP={hp}, too dangerous"}
 
     # Flee from strong enemies (they deal more damage than us) with retreat path planning
-    if enemies_here and hp < 50 and ep >= move_ep_cost:
+    # Mode-based HP threshold: aggressive=40, balanced=50, passive=60
+    strong_enemy_hp_threshold = 40 if aggression == "aggressive" else (60 if aggression == "passive" else 50)
+    if enemies_here and hp < strong_enemy_hp_threshold and ep >= move_ep_cost:
         my_bonus = get_weapon_bonus(equipped)
         for enemy in enemies_here:
             e_dmg = calc_damage(enemy.get("atk", 10), _estimate_enemy_weapon_bonus(enemy), defense, region_weather)
