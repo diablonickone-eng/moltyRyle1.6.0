@@ -304,8 +304,11 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # Inventory summary for monitoring
     inv_heals = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS])
     inv_wpns = len([i for i in inventory if i.get("category") == "weapon" or i.get("typeId", "").lower() in WEAPONS])
-    log.info("INVENTORY: HP=%d EP=%d | HealItems=%d Weapons=%d | WeaponEquipped=%s",
-             hp, ep, inv_heals, inv_wpns, equipped.get("typeId") if isinstance(equipped, dict) else equipped)
+    inv_maps = len([i for i in inventory if isinstance(i, dict) and i.get("typeId", "").lower() == "map"])
+    log.info("INVENTORY: HP=%d EP=%d | HealItems=%d Weapons=%d Maps=%d | WeaponEquipped=%s",
+             hp, ep, inv_heals, inv_wpns, inv_maps, equipped.get("typeId") if isinstance(equipped, dict) else equipped)
+    if inv_maps > 0:
+        log.info("[MAP_TRACKING] Inventory contains %d Map(s) - should use immediately if not used yet", inv_maps)
     visible_regions = view.get("visibleRegions", [])
     connected_regions = view.get("connectedRegions", [])
     pending_dz = view.get("pendingDeathzones", [])
@@ -990,6 +993,28 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     log.info("IDLE: Staying in place (EP=%d, Targets=%s)", ep, has_targets)
 
+    # ── Priority 9b: BOREDOM MOVEMENT ───────────────────────────────
+    # If staying idle too long with full EP, force movement to random safe region
+    # This prevents getting stuck when all nearby regions visited
+    global _current_turn
+    _consecutive_idle_turns = getattr(decide_action, '_consecutive_idle_turns', 0)
+    
+    if not has_targets and ep >= 8 and not enemies_here:
+        _consecutive_idle_turns += 1
+        if _consecutive_idle_turns >= 3:  # 3 turns idle with full EP
+            # Force move to any random safe connected region
+            for conn in connections:
+                rid = _get_region_id(conn)
+                if rid and rid not in danger_ids and rid != region_id:
+                    log.info("BOREDOM_MOVE: Forcing movement after %d idle turns", _consecutive_idle_turns)
+                    _consecutive_idle_turns = 0
+                    decide_action._consecutive_idle_turns = 0
+                    return {"action": "move", "data": {"regionId": rid},
+                            "reason": "BOREDOM: Forcing move after idle with full EP"}
+    else:
+        _consecutive_idle_turns = 0
+    decide_action._consecutive_idle_turns = _consecutive_idle_turns
+
     # ── Priority 10: Rest (EP < 4 and safe) ───────────────────────
     # Also rest if weather is storm and no urgent targets
     if (ep < 4 or weather_delay) and not enemies_here and not region.get("isDeathZone") and region_id not in danger_ids:
@@ -1345,8 +1370,13 @@ def _pickup_score(item: dict, inventory: list, heal_count: int) -> int:
                        for i in inventory)
         return 55 if not has_binos else 0  # Don't stack
 
-    # Map: always pickup (will be used immediately)
+    # Map: only pickup if don't have any Map yet (one is enough)
     if type_id == "map":
+        map_count = sum(1 for i in inventory if isinstance(i, dict) and i.get("typeId", "").lower() == "map")
+        if map_count > 0:
+            log.info("[MAP_TRACKING] Skip pickup | Already have %d Map(s) in inventory", map_count)
+            return 0  # Don't pickup more Maps
+        log.info("[MAP_TRACKING] Pickup allowed | No maps in inventory yet")
         return 52
 
     # Healing items: stockpile for endgame (want 3-4 items)
@@ -1647,7 +1677,7 @@ def _find_safe_region_with_exit(connections, danger_ids: set, view: dict = None)
 
 def _use_utility_item(inventory: list, hp: int, ep: int, alive_count: int) -> dict | None:
     """Use utility items immediately after pickup.
-    Map: PASSIVE in some versions — just holding it reveals the map.
+    Map: CONSUMABLE (1-time) — use immediately to reveal entire map.
     Binoculars: PASSIVE (vision+1 just by holding) — no use_item needed.
     """
     for item in inventory:
@@ -1660,6 +1690,14 @@ def _use_utility_item(inventory: list, hp: int, ep: int, alive_count: int) -> di
         action_key = f"use_item:{item_id}"
         if _failed_actions.get(action_key, 0) > _current_turn:
             continue
+
+        # Map: Use immediately to reveal entire map (1-time consumable)
+        # Per combat-items.md: Map reveals entire map, consumable
+        if type_id == "map":
+            map_count = sum(1 for i in inventory if isinstance(i, dict) and i.get("typeId", "").lower() == "map")
+            log.info("[MAP_TRACKING] Attempting to USE map | itemId=%s | Maps in inventory: %d", item_id, map_count)
+            return {"action": "use_item", "data": {"itemId": item_id},
+                    "reason": "UTILITY: Using Map to reveal entire map layout"}
 
         # Energy Drink: use if EP is low
         if type_id == "energy_drink" and ep <= 5:

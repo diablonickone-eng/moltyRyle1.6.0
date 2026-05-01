@@ -594,7 +594,7 @@ class WebSocketEngine:
                              for i in region_items[:10]],
         })
 
-        # Map learning: after Map item used, learn from the expanded vision
+# ... (rest of the code remains the same)
         if self._map_just_used:
             self._map_just_used = False
             learn_from_map(view)
@@ -666,6 +666,9 @@ class WebSocketEngine:
                 self._game_stats["heal_items_used"] += 1
             elif any(w in reason.lower() for w in ["weapon", "equip"]):
                 item_type = "weapon"
+            elif "map" in reason.lower():
+                item_type = "map"
+                log.info("[MAP_TRACKING] USE_ITEM action recorded | itemId=%s | reason=%s", item_id, reason[:60])
             
             self._game_stats["items_used"].append({
                 "typeId": item_id,
