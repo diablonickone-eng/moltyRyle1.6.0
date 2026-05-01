@@ -316,6 +316,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     messages = view.get("recentMessages", [])
     alive_count = view.get("aliveCount", 100)
 
+    # NEW: Detect guardians from whisper messages (they whisper from their location)
+    _detect_guardians_from_whispers(messages, region_id, connected_regions, visible_regions)
+
     # Fallback connections from currentRegion if connectedRegions empty
     connections = connected_regions or region.get("connections", [])
     interactables = region.get("interactables", [])
@@ -1635,6 +1638,49 @@ def _track_agents(visible_agents: list, my_id: str, my_region: str):
         dead = [k for k, v in _known_agents.items() if not v.get("isAlive", True)]
         for d in dead:
             del _known_agents[d]
+
+
+def _detect_guardians_from_whispers(messages: list, my_region: str, connections: list, visible_regions: list):
+    """Detect guardian locations from whisper messages.
+    Guardians whisper to players in same region (30% chance per turn per docs).
+    If we receive a whisper, the guardian is likely in our current region or adjacent.
+    """
+    global _guardian_locations
+    if not messages:
+        return
+    
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        # Check if it's a whisper
+        msg_type = msg.get("type", "").lower()
+        if msg_type not in ("whisper", "private"):
+            continue
+        
+        sender = msg.get("sender", {}).get("name", "") if isinstance(msg.get("sender"), dict) else ""
+        content = msg.get("content", "") or msg.get("message", "")
+        sender_id = msg.get("senderId", "")
+        
+        # Check if sender might be a guardian (name patterns or ID patterns)
+        is_likely_guardian = (
+            "guardian" in sender.lower() or
+            (isinstance(sender_id, str) and "guardian" in sender_id.lower())
+        )
+        
+        if is_likely_guardian:
+            # Guardian whispers from their location
+            # If we can see them in visible_regions, they might be nearby
+            log.info("[GUARDIAN_DETECT] Whisper from %s: '%s...' | Likely in/near %s",
+                     sender, content[:30], my_region[:8])
+            
+            # Mark current region and adjacent as possible guardian locations
+            _guardian_locations[my_region] = True
+            
+            # Also check if sender regionId is provided in message
+            sender_region = msg.get("sender", {}).get("regionId", "") if isinstance(msg.get("sender"), dict) else ""
+            if sender_region:
+                _guardian_locations[sender_region] = True
+                log.info("[GUARDIAN_DETECT] Guardian location confirmed: %s", sender_region[:8])
 
 
 def _track_guardians(visible_agents: list, my_region: str):

@@ -387,5 +387,46 @@
       "chase_threshold_hp": 50
     },
     "fitness": 544.5
+  },
+  {
+    "timestamp": "2026-05-01T15:15:40.068855",
+    "generation": 13,
+    "placement": 100,
+    "kills": 0,
+    "survival_time": 95,
+    "damage_dealt": 0,
+    "damage_taken": 0,
+    "moltz_earned": 0,
+    "dna_snapshot": {
+      "combat_hp_threshold": 50,
+      "finisher_threshold_early": 40,
+      "finisher_threshold_late": 60,
+      "ready_for_war_hp": 60,
+      "aggression_early": 0.3,
+      "aggression_mid": 0.6,
+      "aggression_late": 0.9,
+      "weapon_priority_boost": 100,
+      "heal_stockpile_target": 4,
+      "currency_priority": 300,
+      "exploration_weight": 10,
+      "enemy_avoidance_weight": 20,
+      "loot_proximity_weight": 15,
+      "hunting_weight": 50,
+      "max_enemies_safe": 2,
+      "danger_flee_hp": 40,
+      "chase_threshold_hp": 50
+    },
+    "cause_of_death": null,
+    "time_of_death": null,
+    "last_region_id": null,
+    "items_used": [],
+    "heal_items_used": 0,
+    "weapon_switches": 0,
+    "facilities_used": [],
+    "peak_hp": 100,
+    "lowest_hp": 98,
+    "total_moves": 2,
+    "total_rests": 0,
+    "fitness": 57.5
   }
 ]
