@@ -557,15 +557,35 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 if safe:
                     log.warning("⚠️ Outmatched! Enemy dmg=%d vs ours=%d, fleeing", e_dmg, my_dmg)
                     return {"action": "move", "data": {"regionId": safe},
-                            "reason": f"FLEE: Outmatched enemy dmg={e_dmg} vs {my_dmg}, HP={hp}"}
-                break
+                        "reason": f"OUTMATCHED FLEE: Enemy dmg={e_dmg} vs {my_dmg}, HP={hp}"}
 
-    # ── FREE ACTIONS (no cooldown, do before main action) ─────────
+    # ── Priority 4b: DEFENSIVE ATTACK (Musuh di region sama = bahaya!) ─────────────────
+    # Kalau ada musuh di region yang sama, SERANG! Jangan pickup/interact dulu!
+    # Musuh akan attack kita kalau kita wasting turn!
+    if enemies_here and has_weapon and hp >= 30 and ep >= COMBAT_MIN_EP:
+        # Cari musuh terlemah atau yang paling berbahaya
+        target = _select_weakest(enemies_here)
+        if target:
+            enemy_hp = target.get("hp", 100)
+            enemy_name = target.get("name", "?")
+            log.info("⚔️ DEFENSIVE_ATTACK: %s in same region (HP=%d) — attacking NOW!", 
+                     enemy_name, enemy_hp)
+            return {"action": "attack",
+                    "data": {"targetId": target["id"], "targetType": "agent"},
+                    "reason": f"DEFENSIVE: Attacking {enemy_name} (HP={enemy_hp}) in same region before they attack us!"}
 
-    # Auto-pickup Moltz (currency) and valuable items
-    pickup_action = _check_pickup(visible_items, inventory, region_id)
-    if pickup_action:
-        return pickup_action
+    # ── Priority 5: Free actions (pickup, equip) ─────────────────
+    # ONLY do free actions if NO enemies in same region!
+    if not enemies_here:  # Safe to loot/interact
+        # Moderate healing in safe area
+        heal_action = _moderate_heal_in_safe_area(hp, maxHp, inventory, healing_count, enemies_here, region_id)
+        if heal_action:
+            return heal_action
+        
+        # Auto-pickup Moltz (currency) and valuable items
+        pickup_action = _check_pickup(visible_items, inventory, region_id)
+        if pickup_action:
+            return pickup_action
 
     # Auto-equip better weapon
     equip_action = _check_equip(inventory, equipped)
