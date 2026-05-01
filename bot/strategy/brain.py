@@ -454,12 +454,23 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # Legacy code kept inert — will re-enable when curse returns.
     # (was: _check_curse → whisper answer to guardian)
 
-    # ── Priority 2b: Threat evasion (guardians + strong enemies) ───
+    # ── Priority 2b: Threat evasion (guardians + strong enemies + OUTNUMBERED) ───
     # Enemies list already pre-calculated at start of function
     guardians_here = [a for a in visible_agents
                       if a.get("isGuardian", False) and a.get("isAlive", True)
                       and a.get("regionId") == region_id]
     # enemies_here sudah didefinisikan di atas dengan benar (termasuk yang tanpa regionId)
+
+    # EMERGENCY: Flee if OUTNUMBERED (3+ enemies vs 1, or 2+ with no weapon)
+    enemy_count = len(enemies_here)
+    outnumbered_threshold = 2 if not has_weapon else 3  # No weapon = flee at 2 enemies
+    if enemy_count >= outnumbered_threshold and ep >= move_ep_cost:
+        safe = _find_safe_region_with_exit(connections, danger_ids, view)
+        if safe:
+            log.warning("🚨 OUTNUMBERED! %d enemies vs 1, no weapon=%s — FLEEING!", 
+                       enemy_count, not has_weapon)
+            return {"action": "move", "data": {"regionId": safe},
+                    "reason": f"OUTNUMBERED FLEE: {enemy_count} enemies vs 1, too dangerous!"}
 
     # Flee from guardians when HP low (with retreat path planning)
     if guardians_here and hp < GUARDIAN_FARM_MIN_HP and ep >= move_ep_cost:
