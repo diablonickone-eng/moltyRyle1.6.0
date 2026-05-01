@@ -1690,13 +1690,12 @@ def _use_utility_item(inventory: list, hp: int, ep: int, alive_count: int) -> di
         if _failed_actions.get(action_key, 0) > _current_turn:
             continue
 
-        # Map: Use immediately to reveal entire map (1-time consumable)
-        # Per combat-items.md: Map reveals entire map, consumable
-        if type_id == "map":
-            map_count = sum(1 for i in inventory if isinstance(i, dict) and i.get("typeId", "").lower() == "map")
-            log.info("[MAP_TRACKING] Attempting to USE map | itemId=%s | Maps in inventory: %d", item_id, map_count)
-            return {"action": "use_item", "data": {"itemId": item_id},
-                    "reason": "UTILITY: Using Map to reveal entire map layout"}
+        # NOTE: Map usage via use_item FAILS with "Cannot use this item"
+        # Map appears to be either:
+        # 1. Auto-reveal on pickup (passive activation)
+        # 2. Already consumed but still showing in inventory (ghost item)
+        # 3. Different mechanic than documented
+        # We no longer try to use Map - just prevent picking up multiple.
 
         # Energy Drink: use if EP is low
         if type_id == "energy_drink" and ep <= 5:
