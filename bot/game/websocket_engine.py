@@ -356,12 +356,16 @@ class WebSocketEngine:
                     is_target_me = (my_id and (my_id in tgt_str or my_id[:8] in tgt_str or tgt_str in my_id)) or \
                                    (my_key and (my_key in tgt_str or my_key[:8] in tgt_str or tgt_str in my_key))
                     
+                    # DEBUG: Log ID matching untuk troubleshoot
+                    log.debug("COMBAT_TRACK: my_id=%s my_key=%s | atk=%s tgt=%s | is_me=%s is_target_me=%s dmg=%s",
+                              my_id[:8], my_key[:8], atk_str[:20], tgt_str[:20], is_me, is_target_me, dmg_val)
+                    
                     if is_me and dmg_val > 0:
                         self._game_stats["damage_dealt"] += dmg_val
-                        log.debug("💥 DAMAGE DEALT: %d | Total: %d", dmg_val, self._game_stats["damage_dealt"])
+                        log.info("💥 DAMAGE DEALT: %d | Total: %d", dmg_val, self._game_stats["damage_dealt"])
                     if is_target_me and dmg_val > 0:
                         self._game_stats["damage_taken"] += dmg_val
-                        log.debug("💔 DAMAGE TAKEN: %d | Total: %d", dmg_val, self._game_stats["damage_taken"])
+                        log.info("💔 DAMAGE TAKEN: %d | Total: %d", dmg_val, self._game_stats["damage_taken"])
                     if is_me and is_kill:
                         self._game_stats["kills"] += 1
                         log.info("🎯 KILL TRACKED! Total kills this game: %d", self._game_stats["kills"])
