@@ -850,6 +850,74 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                             return {"action": "move", "data": {"regionId": target_rid},
                                     "reason": f"FINISHER CHASE: Pursuing weak {target.get('name','?')} (HP={target.get('hp')})"}
                 
+    # ── Priority 7.5: SNIPER GUARDIAN HUNTER (Range 2 positioning) ─────
+    # With Sniper: Find optimal range 2 position near guardians, kite low HP enemies
+    is_sniper_mode = (w_type == "sniper" and w_range == 2)
+    if is_sniper_mode:
+        # Check if guardians known in adjacent regions
+        guardian_nearby_regions = [rid for rid in _guardian_locations.keys() 
+                                    if rid != region_id and rid not in danger_ids]
+        
+        if guardian_nearby_regions:
+            # SNIPER STRATEGY: Position at range 2 from guardians
+            # Find if we're already at optimal position (can see guardians at range 2)
+            can_see_guardian = any(rid in adjacent_ids for rid in guardian_nearby_regions)
+            
+            if can_see_guardian:
+                # OPTIMAL POSITION: We can shoot guardians from here!
+                # Check for threats: enemies entering our region (range 0)
+                if enemies_here:
+                    # THREAT! Enemy in same region - KITE AWAY immediately!
+                    log.warning("🏹 SNIPER_KITE: Enemy in region! HP=%d, fleeing to maintain range", hp)
+                    safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids 
+                                  and _get_region_id(c) not in guardian_nearby_regions]
+                    if safe_conns:
+                        escape_rid = _get_region_id(safe_conns[0])
+                        return {"action": "move", "data": {"regionId": escape_rid},
+                                "reason": "SNIPER_KITE: Enemy too close, maintaining range 2 advantage"}
+                
+                # Check enemies in range 2 (adjacent) - priority kiting low HP
+                if enemies_in_range:
+                    low_hp_enemies = [e for e in enemies_in_range if e.get("hp", 100) < 50]
+                    if low_hp_enemies and ep >= COMBAT_MIN_EP:
+                        target = _select_weakest(low_hp_enemies)
+                        log.info("🏹 SNIPER_KITE_SHOT: Low HP enemy %s (HP=%d) in range 2",
+                                target.get('name','?'), target.get('hp',0))
+                        return {"action": "attack",
+                                "data": {"targetId": target["id"], "targetType": "agent"},
+                                "reason": f"SNIPER_KITE: Low HP target {target.get('name','?')} at range 2"}
+                
+                # SAFE POSITION: Rest and scan for guardians
+                if hp < 80 or ep < 8:
+                    log.info("🏹 SNIPER_CAMP: Optimal position, resting (HP=%d EP=%d)", hp, ep)
+                    return {"action": "rest", "data": {},
+                            "reason": "SNIPER_CAMP: Range 2 from guardians, recovering resources"}
+                
+                # Attack guardian if in range 2
+                for g in guardians:
+                    g_region = g.get("regionId", "")
+                    if g_region in adjacent_ids and ep >= COMBAT_MIN_EP:
+                        log.info("🏹 SNIPER_SHOT: Guardian at range 2, safe to engage")
+                        return {"action": "attack",
+                                "data": {"targetId": g["id"], "targetType": "agent"},
+                                "reason": "SNIPER: Guardian at optimal range 2"}
+            else:
+                # NOT IN POSITION: Move to get range 2 on guardians
+                # Find connection that puts us adjacent to guardian
+                for conn in connections:
+                    conn_rid = _get_region_id(conn)
+                    # Check if this region is adjacent to any guardian region
+                    if conn_rid not in danger_ids:
+                        # Check connections of this region
+                        resolved = _resolve_region(conn, {"visibleRegions": visible_regions})
+                        if resolved:
+                            conn_connections = resolved.get("connections", [])
+                            conn_adjacent = set(_get_region_id(c) for c in conn_connections)
+                            if any(g_rid in conn_adjacent for g_rid in guardian_nearby_regions):
+                                log.info("🏹 SNIPER_APPROACH: Moving to range 2 position near guardian")
+                                return {"action": "move", "data": {"regionId": conn_rid},
+                                        "reason": "SNIPER_APPROACH: Positioning for range 2 shot on guardian"}
+
     # ── Priority 8: Guardian farming (120 sMoltz per kill!) ────────
     # Only farm if: HP is safe + we can win the fight + EP budget for chase
     guardians = [a for a in visible_agents
