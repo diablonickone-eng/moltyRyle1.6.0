@@ -9,6 +9,7 @@ import sys
 from bot.heartbeat import Heartbeat
 from bot.dashboard.server import start_dashboard
 from bot.utils.logger import get_logger
+from bot.autonomous_integration import autonomous_manager
 
 log = get_logger(__name__)
 
@@ -16,9 +17,15 @@ log = get_logger(__name__)
 DASHBOARD_PORT = int(os.getenv("PORT", os.getenv("DASHBOARD_PORT", "8080")))
 
 
-def main():
-    """Entry point for the bot."""
-    log.info("Molty Royale AI Agent v2.0.0")
+async def main():
+    """Entry point for the bot with autonomous AI integration."""
+    log.info("Molty Royale AI Agent v1.6.0")
+    log.info("By Eryck Juliant")
+    log.info("🤖 Autonomous AI System: Initializing...")
+    
+    # Initialize autonomous AI system
+    await autonomous_manager.initialize_autonomous_system()
+    
     log.info("Press Ctrl+C to stop")
 
     heartbeat = Heartbeat()
@@ -32,10 +39,14 @@ def main():
     try:
         if sys.platform == "win32":
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        asyncio.run(run_all())
+        await run_all()
     except KeyboardInterrupt:
         log.info("Shutdown complete.")
 
+def main_sync():
+    """Synchronous entry point for backwards compatibility."""
+    asyncio.run(main())
+
 
 if __name__ == "__main__":
-    main()
+    main_sync()
