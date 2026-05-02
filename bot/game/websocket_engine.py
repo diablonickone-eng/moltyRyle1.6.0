@@ -165,10 +165,10 @@ class WebSocketEngine:
                 log.info("Handshake with key: %s...", api_key[:8])
                 async with websockets.connect(
                     ws_url,
-                    extra_headers=headers,
+                    additional_headers=headers,
                     ping_interval=None,  # We handle our own pings
                     max_size=2**20,  # 1MB max message
-                    close_timeout=10,  # v12+ compatibility
+                    close_timeout=10,  # v15+ compatibility
                 ) as ws:
                     result = await self._run_with_socket(ws)
                     if result is not None:
