@@ -316,15 +316,15 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     messages = view.get("recentMessages", [])
     alive_count = view.get("aliveCount", 100)
 
-    # NEW: Detect guardians from whisper messages (they whisper from their location)
-    _detect_guardians_from_whispers(messages, region_id, connected_regions, visible_regions)
-
     # Fallback connections from currentRegion if connectedRegions empty
     connections = connected_regions or region.get("connections", [])
     interactables = region.get("interactables", [])
     region_id = region.get("id", "")
     region_terrain = region.get("terrain", "").lower() if isinstance(region, dict) else ""
     region_weather = region.get("weather", "").lower() if isinstance(region, dict) else ""
+
+    # NEW: Detect guardians from whisper messages (they whisper from their location)
+    _detect_guardians_from_whispers(messages, region_id, connected_regions, visible_regions)
 
     # Combat/Aggression pre-calculations
     enemies = [a for a in visible_agents if not a.get("isGuardian") and a.get("isAlive") and a.get("id") != self_data.get("id")]
