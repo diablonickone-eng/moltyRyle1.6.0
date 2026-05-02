@@ -29,6 +29,7 @@ from bot.config import (
     GUARDIAN_FARM_MIN_HP, COMBAT_MIN_EP,
 )
 from bot.learning.strategy_dna import get_dna
+from bot.autonomous_ai import autonomous_ai
 
 log = get_logger(__name__)
 
@@ -872,9 +873,20 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 # Check for threats: enemies entering our region (range 0)
                 if enemies_here:
                     # Check if enemy is weak (fist user) - kill immediately!
-                    weak_enemies = [e for e in enemies_here if e.get("hp", 100) <= 50 or 
+                    # Use autonomous AI parameters for dynamic threshold
+                    weak_threshold = autonomous_ai.strategy_params.weak_enemy_threshold
+                    aggression_mod = autonomous_ai.strategy_params.aggression_level
+                    
+                    weak_enemies = [e for e in enemies_here if e.get("hp", 100) <= weak_threshold or 
                                    (e.get("equippedWeapon") is None or 
                                     e.get("equippedWeapon", {}).get("typeId", "") == "fist")]
+                    
+                    # Apply aggression modifier to decision making
+                    should_attack = weak_enemies and ep >= COMBAT_MIN_EP
+                    if should_attack and aggression_mod < 0.5:
+                        # Low aggression - be more selective
+                        weak_enemies = [e for e in weak_enemies if e.get("hp", 100) <= weak_threshold * 0.8]
+                    
                     if weak_enemies and ep >= COMBAT_MIN_EP:
                         target = _select_weakest(weak_enemies)
                         log.info("🏹 SNIPER_EASY_KILL: Weak enemy %s (HP=%d Weapon=%s) in same region - KILL!",
