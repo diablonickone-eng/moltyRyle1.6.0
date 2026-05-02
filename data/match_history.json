@@ -428,5 +428,59 @@
     "total_moves": 2,
     "total_rests": 0,
     "fitness": 57.5
+  },
+  {
+    "timestamp": "2026-05-02T18:17:24.890621",
+    "generation": 14,
+    "placement": 100,
+    "kills": 0,
+    "survival_time": 763,
+    "damage_dealt": 11,
+    "damage_taken": 0,
+    "moltz_earned": 0,
+    "dna_snapshot": {
+      "combat_hp_threshold": 50,
+      "finisher_threshold_early": 40,
+      "finisher_threshold_late": 60,
+      "ready_for_war_hp": 63,
+      "aggression_early": 0.3,
+      "aggression_mid": 0.707,
+      "aggression_late": 0.9,
+      "weapon_priority_boost": 100,
+      "heal_stockpile_target": 4,
+      "currency_priority": 300,
+      "exploration_weight": 10,
+      "enemy_avoidance_weight": 20,
+      "loot_proximity_weight": 15,
+      "hunting_weight": 50,
+      "max_enemies_safe": 2,
+      "danger_flee_hp": 40,
+      "chase_threshold_hp": 50
+    },
+    "cause_of_death": null,
+    "time_of_death": null,
+    "last_region_id": null,
+    "items_used": [
+      {
+        "typeId": "b5ef5a3f-0f7c-44d1-9d24-633460951b4a",
+        "category": "healing",
+        "reason": "MODERATE HEAL: HP=26<70, safe area, using emergenc",
+        "timestamp": 1777719941.5114338
+      },
+      {
+        "typeId": "d6f65d11-ac66-4d9f-bce9-49d9f59c8c12",
+        "category": "healing",
+        "reason": "MODERATE HEAL: HP=46<70, safe area, using bandage",
+        "timestamp": 1777720001.611561
+      }
+    ],
+    "heal_items_used": 2,
+    "weapon_switches": 0,
+    "facilities_used": [],
+    "peak_hp": 100,
+    "lowest_hp": 26,
+    "total_moves": 9,
+    "total_rests": 1,
+    "fitness": 392.6
   }
 ]

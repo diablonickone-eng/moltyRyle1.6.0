@@ -871,14 +871,27 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 # OPTIMAL POSITION: We can shoot guardians from here!
                 # Check for threats: enemies entering our region (range 0)
                 if enemies_here:
-                    # THREAT! Enemy in same region - KITE AWAY immediately!
-                    log.warning("🏹 SNIPER_KITE: Enemy in region! HP=%d, fleeing to maintain range", hp)
+                    # Check if enemy is weak (fist user) - kill immediately!
+                    weak_enemies = [e for e in enemies_here if e.get("hp", 100) <= 50 or 
+                                   (e.get("equippedWeapon") is None or 
+                                    e.get("equippedWeapon", {}).get("typeId", "") == "fist")]
+                    if weak_enemies and ep >= COMBAT_MIN_EP:
+                        target = _select_weakest(weak_enemies)
+                        log.info("🏹 SNIPER_EASY_KILL: Weak enemy %s (HP=%d Weapon=%s) in same region - KILL!",
+                                target.get('name','?'), target.get('hp',0), 
+                                target.get('equippedWeapon', {}).get('typeId', 'fist'))
+                        return {"action": "attack",
+                                "data": {"targetId": target["id"], "targetType": "agent"},
+                                "reason": f"SNIPER_EASY_KILL: Weak target {target.get('name','?')} with {target.get('equippedWeapon', {}).get('typeId', 'fist')}"}
+                    
+                    # THREAT! Strong enemy in same region - KITE AWAY!
+                    log.warning("🏹 SNIPER_KITE: Strong enemy in region! HP=%d, fleeing to maintain range", hp)
                     safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids 
                                   and _get_region_id(c) not in guardian_nearby_regions]
                     if safe_conns:
                         escape_rid = _get_region_id(safe_conns[0])
                         return {"action": "move", "data": {"regionId": escape_rid},
-                                "reason": "SNIPER_KITE: Enemy too close, maintaining range 2 advantage"}
+                                "reason": "SNIPER_KITE: Strong enemy too close, maintaining range 2 advantage"}
                 
                 # Check enemies in range 2 (adjacent) - priority kiting low HP
                 if enemies_in_range:
