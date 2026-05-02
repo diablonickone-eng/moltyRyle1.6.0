@@ -110,7 +110,11 @@ class WebSocketEngine:
         """
         self._existing_ws = existing_ws
         api_key = get_api_key()
-        headers = None
+        headers = {
+            "Authorization": f"mr-auth {api_key}",
+            "X-API-Key": api_key,
+            "X-Version": SKILL_VERSION,
+        }
 
         self._running = True
         retry_count = 0
@@ -128,20 +132,13 @@ class WebSocketEngine:
         while self._running and retry_count < max_retries:
             try:
                 log.info("Connecting WebSocket to %s...", WS_URL)
-                ws_url = WS_URL
+                ws_url_with_auth = f"{WS_URL}?apiKey={api_key}"
                 log.info("Handshake with key: %s...", api_key[:8])
-                log.info("DEBUG: API key format = %s...%s (length=%d)", api_key[:8], api_key[-8:], len(api_key))
-                headers = {
-                    "X-API-Key": api_key,
-                    "X-Version": "1.6.0"
-                }
-                log.info("DEBUG: Using headers = %s", headers)
                 async with websockets.connect(
-                    ws_url,
-                    extra_headers=headers,
+                    ws_url_with_auth,
+                    additional_headers=headers,
                     ping_interval=None,  # We handle our own pings
                     max_size=2**20,  # 1MB max message
-                    close_timeout=10,  # v12+ compatibility
                 ) as ws:
                     result = await self._run_with_socket(ws)
                     if result is not None:
@@ -597,7 +594,7 @@ class WebSocketEngine:
                              for i in region_items[:10]],
         })
 
-# ... (rest of the code remains the same)
+        # Map learning: after Map item used, learn from the expanded vision
         if self._map_just_used:
             self._map_just_used = False
             learn_from_map(view)
@@ -669,9 +666,6 @@ class WebSocketEngine:
                 self._game_stats["heal_items_used"] += 1
             elif any(w in reason.lower() for w in ["weapon", "equip"]):
                 item_type = "weapon"
-            elif "map" in reason.lower():
-                item_type = "map"
-                log.info("[MAP_TRACKING] USE_ITEM action recorded | itemId=%s | reason=%s", item_id, reason[:60])
             
             self._game_stats["items_used"].append({
                 "typeId": item_id,
