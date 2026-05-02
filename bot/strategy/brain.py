@@ -50,12 +50,13 @@ WEAPON_PRIORITY = ["katana", "sniper", "sword", "pistol", "dagger", "bow", "fist
 # Binoculars = passive (vision+1 just by holding), always pickup.
 ITEM_PRIORITY = {
     "rewards": 300,  # Moltz/sMoltz — ALWAYS pickup first
-    "katana": 100, "sniper": 95, "sword": 90, "pistol": 85,
-    "dagger": 80, "bow": 75,
+    "katana": 120, "sniper": 115, "sword": 110, "pistol": 105,
+    "dagger": 100, "bow": 95,
     "medkit": 70, "bandage": 65, "emergency_food": 60, "energy_drink": 58,
     "binoculars": 55,  # Passive: vision +1 permanent, always pickup
-    "map": 52,          # Use immediately to reveal entire map
-    "megaphone": 40,
+    "map": 52,         # Reveal entire map (consumable/one-time)
+    "megaphone": 50,   # Global broadcast (consumable)
+    "moltz": 10,       # Ground currency (pickup if nothing else)
 }
 
 # ── Recovery items for healing (combat-items.md) ──────────────────────
@@ -501,13 +502,16 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     suspected_party = (enemy_count >= 4) or (dominant_count >= 3 and dominant_clan)
     
     if suspected_party:
-        if dominant_count >= 3 and dominant_clan:
+        # Only flee from clan parties if they're significantly larger (4+ players) OR we're low HP
+        clan_flee_threshold = 4 if hp >= 70 else 3
+        if dominant_count >= clan_flee_threshold and dominant_clan:
             log.warning("🚨 CLAN/PARTY DETECTED: '%s_' x%d enemies! Coordinated group!", 
                        dominant_clan, dominant_count)
             reason = f"CLAN FLEE: Coordinated group '{dominant_clan}_' x{dominant_count}!"
         else:
-            log.warning("🚨 SUSPECTED PARTY: %d enemies in region, possible coordination!", enemy_count)
-            reason = f"SUSPECTED PARTY: {enemy_count} enemies, too dangerous!"
+            log.info("👥 Clan party '%s_' x%d detected but manageable (HP=%d)", 
+                    dominant_clan or "unknown", dominant_count, hp)
+            suspected_party = False  # Don't flee - fight or observe
         
         # Force flee regardless of mode - 1 vs party = suicide
         safe = _find_safe_region_with_exit(connections, danger_ids, view)
