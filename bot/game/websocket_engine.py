@@ -36,6 +36,22 @@ try:
 except ImportError:
     log.info("aiohttp: Not installed")
 log.info("Platform: %s", sys.platform)
+
+# Check websockets API compatibility for this version
+try:
+    import inspect
+    connect_sig = inspect.signature(websockets.connect)
+    params = list(connect_sig.parameters.keys())
+    log.info("websockets.connect parameters: %s", params)
+    
+    has_extra_headers = 'extra_headers' in params
+    has_additional_headers = 'additional_headers' in params
+    log.info("Supports extra_headers: %s", has_extra_headers)
+    log.info("Supports additional_headers: %s", has_additional_headers)
+    
+except Exception as e:
+    log.error("API check failed: %s", e)
+
 log.info("=== END ENVIRONMENT DEBUG ===")
 
 
