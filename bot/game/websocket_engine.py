@@ -14,6 +14,7 @@ import json
 import time
 import asyncio
 import websockets
+import sys
 from bot.config import WS_URL, SKILL_VERSION
 from bot.credentials import get_api_key
 from bot.game.action_sender import ActionSender, COOLDOWN_ACTIONS, FREE_ACTIONS
@@ -24,6 +25,18 @@ from bot.utils.rate_limiter import ws_limiter
 from bot.utils.logger import get_logger
 
 log = get_logger(__name__)
+
+# Log environment versions for debugging
+log.info("=== ENVIRONMENT DEBUG ===")
+log.info("Python version: %s", sys.version)
+log.info("Websockets version: %s", websockets.__version__)
+try:
+    import aiohttp
+    log.info("aiohttp version: %s", aiohttp.__version__)
+except ImportError:
+    log.info("aiohttp: Not installed")
+log.info("Platform: %s", sys.platform)
+log.info("=== END ENVIRONMENT DEBUG ===")
 
 
 def _update_dz_knowledge(view: dict):
