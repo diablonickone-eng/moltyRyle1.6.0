@@ -893,16 +893,32 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         return {"action": "move", "data": {"regionId": escape_rid},
                                 "reason": "SNIPER_KITE: Strong enemy too close, maintaining range 2 advantage"}
                 
-                # Check enemies in range 2 (adjacent) - priority kiting low HP
-                if enemies_in_range:
-                    low_hp_enemies = [e for e in enemies_in_range if e.get("hp", 100) < 50]
-                    if low_hp_enemies and ep >= COMBAT_MIN_EP:
-                        target = _select_weakest(low_hp_enemies)
-                        log.info("🏹 SNIPER_KITE_SHOT: Low HP enemy %s (HP=%d) in range 2",
-                                target.get('name','?'), target.get('hp',0))
+                # Check enemies in range 2 (adjacent) - AGGRESSIVE SNIPER
+                if enemies_in_range and ep >= COMBAT_MIN_EP:
+                    # Priority 1: Weak enemies (fist users, HP <= 60)
+                    weak_enemies = [e for e in enemies_in_range if e.get("hp", 100) <= 60 or 
+                                   (e.get("equippedWeapon") is None or 
+                                    e.get("equippedWeapon", {}).get("typeId", "") == "fist")]
+                    if weak_enemies:
+                        target = _select_weakest(weak_enemies)
+                        log.info("🏹 SNIPER_AGGRESSIVE: Weak enemy %s (HP=%d Weapon=%s) in range 2 - KILL!",
+                                target.get('name','?'), target.get('hp',0), 
+                                target.get('equippedWeapon', {}).get('typeId', 'fist'))
                         return {"action": "attack",
                                 "data": {"targetId": target["id"], "targetType": "agent"},
-                                "reason": f"SNIPER_KITE: Low HP target {target.get('name','?')} at range 2"}
+                                "reason": f"SNIPER_AGGRESSIVE: Weak target {target.get('name','?')} with {target.get('equippedWeapon', {}).get('typeId', 'fist')}"}
+                    
+                    # Priority 2: Any enemy (sniper advantage - they can't melee counter)
+                    target = _select_best_target(
+                        enemies_in_range, atk, equipped, defense, region_weather,
+                        my_hp=hp, alive_count=alive_count
+                    )
+                    if target:
+                        log.info("🏹 SNIPER_DOMINANCE: Attacking %s (HP=%d) with range advantage",
+                                target["agent"].get('name','?'), target["agent"].get('hp','?'))
+                        return {"action": "attack",
+                                "data": {"targetId": target["agent"]["id"], "targetType": "agent"},
+                                "reason": f"SNIPER_DOMINANCE: Range advantage vs {target['agent'].get('name','?')}"}
                 
                 # SAFE POSITION: Rest and scan for guardians
                 if hp < 80 or ep < 8:
