@@ -18,7 +18,8 @@ DASHBOARD_PORT = int(os.getenv("PORT", os.getenv("DASHBOARD_PORT", "8080")))
 
 def main():
     """Entry point for the bot."""
-    log.info("Molty Royale AI Agent v2.0.0")
+    log.info("Molty Royale AI Agent v1.6.0")
+    log.info("By Eryck Juliant")
     log.info("Press Ctrl+C to stop")
 
     heartbeat = Heartbeat()
