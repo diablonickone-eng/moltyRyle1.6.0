@@ -754,7 +754,22 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     ep_budget = COMBAT_MIN_EP + move_ep_cost + ep_reserve
 
     # FAST PATH A: Enemies in SAME region (or no regionId) — attack immediately!
+    # FORCE SAME REGION COMBAT: Always attack enemies in same region with sniper
     if enemies_here and ep >= COMBAT_MIN_EP and can_afford_combat and weather_ok:
+        log.info("🎯 SAME_REGION_FORCE_COMBAT: %d enemies in same region - ATTACKING!", len(enemies_here))
+        
+        # PRIORITY: Attack weakest enemy first for quick kills
+        weakest = _select_weakest(enemies_here)
+        if weakest:
+            log.info("⚔️ SAME_REGION_ATTACK: Targeting weakest %s (HP=%s) with sniper advantage",
+                     weakest.get("name", "?"), weakest.get("hp", "?"))
+            _track_attack(attack_type="melee")
+            return {"action": "attack",
+                    "data": {"targetId": weakest["id"], "targetType": "agent"},
+                    "reason": f"SAME_REGION_FORCE: Attacking {weakest.get('name','?')} "
+                              f"(HP={weakest.get('hp','?')} with sniper advantage"}
+        
+        # Fallback: Use best target selection
         target = _select_best_target(
             enemies_here, atk, equipped, defense, region_weather,
             my_hp=hp, alive_count=alive_count
