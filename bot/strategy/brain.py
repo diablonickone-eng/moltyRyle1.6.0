@@ -521,21 +521,39 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     suspected_party = (enemy_count >= 4) or (dominant_count >= 3 and dominant_clan)
     
     if suspected_party:
-        # Only flee from clan parties if they're significantly larger (4+ players) OR we're low HP
+        # ENHANCED CLAN LOGIC: Consider weapon capability and HP before fleeing
         clan_flee_threshold = 4 if hp >= 70 else 3
+        
+        # Check if we have weapon advantage for clan fights
+        has_weapon_for_clan = has_weapon and equipped
+        can_fight_clan = has_weapon_for_clan and hp >= 60
+        
         if dominant_count >= clan_flee_threshold and dominant_clan:
             log.warning("🚨 CLAN/PARTY DETECTED: '%s_' x%d enemies! Coordinated group!", 
                        dominant_clan, dominant_count)
-            reason = f"CLAN FLEE: Coordinated group '{dominant_clan}_' x{dominant_count}!"
+            
+            # DECISION: Fight if armed and healthy, flee if weak
+            if can_fight_clan and dominant_count <= 5:  # Fight smaller clans
+                log.info("⚔️ CLAN_FIGHT: Armed with %s, HP=%d - engaging clan party '%s_' x%d!", 
+                         equipped.get("typeId", "weapon"), hp, dominant_clan, dominant_count)
+                suspected_party = False  # Don't flee - fight!
+                reason = f"CLAN FIGHT: Armed engagement with '{dominant_clan}_' x{dominant_count}"
+            else:
+                # Flee from large clans or when weak
+                if not can_fight_clan:
+                    reason = f"CLAN FLEE: Too weak for '{dominant_clan}_' x{dominant_count} (no weapon/low HP)"
+                else:
+                    reason = f"CLAN FLEE: Clan too large '{dominant_clan}_' x{dominant_count}"
         else:
-            log.info("👥 Clan party '%s_' x%d detected but manageable (HP=%d)", 
-                    dominant_clan or "unknown", dominant_count, hp)
+            log.info("👥 Clan party '%s_' x%d detected but manageable (HP=%d, Weapon=%s)", 
+                    dominant_clan or "unknown", dominant_count, hp, equipped.get("typeId", "none") if equipped else "none")
             suspected_party = False  # Don't flee - fight or observe
         
-        # Force flee regardless of mode - 1 vs party = suicide
-        safe = _find_safe_region_with_exit(connections, danger_ids, view)
-        if safe and ep >= move_ep_cost:
-            return {"action": "move", "data": {"regionId": safe}, "reason": reason}
+        # Only flee if decided to flee
+        if suspected_party:
+            safe = _find_safe_region_with_exit(connections, danger_ids, view)
+            if safe and ep >= move_ep_cost:
+                return {"action": "move", "data": {"regionId": safe}, "reason": reason}
     
     guardians_here = [a for a in visible_agents
                       if a.get("isGuardian", False) and a.get("isAlive", True)
@@ -679,7 +697,15 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                              enemy_strength["ep"], w_range)
                     # Don't flee - stand ground and fight
 
-    # ── Priority 5: Free actions (pickup, equip) ─────────────────
+    # ── Priority 5: COMBAT PREPARATION (Equip weapons before fighting!) ─────────
+    # CRITICAL: Auto-equip weapon when enemies detected - combat readiness!
+    if (enemies_here or enemies_in_range) and not equipped:
+        equip_action = _check_equip(inventory, equipped)
+        if equip_action:
+            log.info("⚔️ COMBAT_PREP: Enemies detected - equipping weapon for combat!")
+            return equip_action
+
+    # ── Priority 5b: Free actions (pickup, equip) ─────────────────
     # COMBAT PRIORITY: Only do free actions if NO enemies nearby!
     # If enemies in range, combat takes priority over inventory management
     if not enemies_here and not enemies_in_range:  # Safe to loot/interact
@@ -830,18 +856,24 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     # ── Priority 6: EP recovery if EP low ─────────────────────────
     # Energy drink (+5 EP) > rest (+1-2 EP). Use before falling back to rest.
-    # IMPROVED: Trigger earlier (EP <= 5) to prevent exhaustion
-    if ep <= 5:
+    # IMPROVED: Higher threshold to prevent excessive rest during flee loops
+    if ep <= 3:  # Only rest when critically low (was <= 5)
         energy_drink = _find_energy_drink(inventory)
         if energy_drink:
-            log.info("EP_CONSERVE: EP=%d low, using energy drink (+5 EP)", ep)
+            log.info("EP_CONSERVE: EP=%d critically low, using energy drink (+5 EP)", ep)
             return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
-                    "reason": f"EP CONSERVE: EP={ep} low, using energy drink (+5 EP)"}
+                    "reason": f"EP CONSERVE: EP={ep} critically low, using energy drink (+5 EP)"}
         # No energy drink — force rest to recover EP
         if not enemies_here and not region.get("isDeathZone"):
             log.info("EP_CONSERVE: EP=%d critically low, forcing rest (+1-2 EP)", ep)
             return {"action": "rest", "data": {},
                     "reason": f"EP CONSERVE: EP={ep} critically low, resting to recover"}
+    
+    # SMART EP MANAGEMENT: Only rest if no enemies nearby and EP is very low
+    elif ep <= 2 and not enemies_here and not enemies_in_range and not region.get("isDeathZone"):
+        log.info("EP_SMART_REST: EP=%d very low, no enemies nearby - strategic rest", ep)
+        return {"action": "rest", "data": {},
+                "reason": f"EP SMART REST: EP={ep} very low, safe area rest"}
 
     # ── Priority 7: Smart Agent Combat (Kill Hunting) ──────────────
     # "Predator Cerdas" logic: Only hunt if we can afford it
