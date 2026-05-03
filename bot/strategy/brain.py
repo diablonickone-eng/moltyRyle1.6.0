@@ -1,12 +1,12 @@
 """
-Strategy brain — main decision engine with priority-based action selection.
+Strategy brain - main decision engine with priority-based action selection.
 Implements the game-loop.md priority chain for high win rate.
 
 v1.5.2 changes:
 - Guardians now ATTACK player agents directly (hostile combatants)
 - Curse is TEMPORARILY DISABLED (no whisper Q&A flow)
 - Free room: 5 guardians (reduced from 30), each drops 120 sMoltz
-- connectedRegions: either full Region objects OR bare string IDs — type-check!
+- connectedRegions: either full Region objects OR bare string IDs - type-check!
 - pendingDeathzones: entries are {id, name} objects
 
 Uses ALL view fields from api-summary.md:
@@ -14,9 +14,9 @@ Uses ALL view fields from api-summary.md:
 - currentRegion: terrain, weather, connections, facilities
 - connectedRegions: adjacent regions (full Region object when visible, bare string ID when out-of-vision)
 - visibleRegions: all regions in vision range
-- visibleAgents: other agents (players + guardians — guardians are HOSTILE)
+- visibleAgents: other agents (players + guardians - guardians are HOSTILE)
 - visibleMonsters: monsters
-- visibleNPCs: NPCs (flavor — safe to ignore per game-systems.md)
+- visibleNPCs: NPCs (flavor - safe to ignore per game-systems.md)
 - visibleItems: ground items in visible regions
 - pendingDeathzones: regions becoming death zones next ({id, name} entries)
 - recentLogs: recent gameplay events
@@ -50,7 +50,7 @@ WEAPON_PRIORITY = ["katana", "sniper", "sword", "pistol", "dagger", "bow", "fist
 # Moltz = ALWAYS pickup (highest). Weapons > healing > utility.
 # Binoculars = passive (vision+1 just by holding), always pickup.
 ITEM_PRIORITY = {
-    "rewards": 300,  # Moltz/sMoltz — ALWAYS pickup first
+    "rewards": 300,  # Moltz/sMoltz - ALWAYS pickup first
     "katana": 120, "sniper": 115, "sword": 110, "pistol": 105,
     "dagger": 100, "bow": 95,
     "medkit": 70, "bandage": 65, "emergency_food": 60, "energy_drink": 58,
@@ -190,6 +190,15 @@ def get_weapon_range(equipped_weapon) -> int:
     type_id = equipped_weapon.get("typeId", "").lower()
     return WEAPONS.get(type_id, {}).get("range", 0)
 
+
+def _get_weapon_strategy(equipped_weapon) -> dict:
+    """Get weapon strategy configuration for equipped weapon."""
+    if not equipped_weapon:
+        return WEAPON_STRATEGIES["fist"]
+    
+    weapon_type = equipped_weapon.get("typeId", "").lower()
+    return WEAPON_STRATEGIES.get(weapon_type, WEAPON_STRATEGIES["fist"])
+
 _known_agents: dict = {}
 # Map knowledge: track all revealed DZ/pending DZ/safe regions after using Map
 _map_knowledge: dict = {"revealed": False, "death_zones": set(), "safe_center": []}
@@ -200,6 +209,8 @@ _guardian_locations: dict = {}  # {region_id: last_seen_turn}
 # Failed actions blacklist: {action_key: expiry_turn}
 _failed_actions: dict = {}
 _current_turn: int = 0
+_planned_next_action = None  # Next action to execute (for multi-turn plans)
+_combat_hotspots: dict = {}  # Track active combat zones
 
 # Combat metrics tracking for performance analysis
 _combat_metrics: dict = {
@@ -231,7 +242,7 @@ def _resolve_region(entry, view: dict):
         for r in view.get("visibleRegions", []):
             if isinstance(r, dict) and r.get("id") == entry:
                 return r
-    return None  # Out-of-vision — only ID is known
+    return None  # Out-of-vision - only ID is known
 
 
 def _get_region_id(entry) -> str:
@@ -255,7 +266,7 @@ def reset_game_state():
     _planned_next_action = None
     _failed_actions = {}
     _current_turn = 0
-    _combat_hotspots = {}  # NEW: Track active combat zones
+    _combat_hotspots = {}
     # Reset metrics for new game
     _combat_metrics = {
         "attacks_attempted": 0, "attacks_successful": 0, "kills": 0, "deaths": 0,
@@ -533,7 +544,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     )
 
     if not is_alive:
-        return None  # Dead — wait for game_ended
+        return None  # Dead - wait for game_ended
 
     # CRITICAL EMERGENCY HEALING: Heal immediately when HP is critically low
     # This bypasses all other logic including cooldown - survival first!
@@ -612,7 +623,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     _visited_regions.add(region_id)
 
     # ── Priority 1: DEATHZONE ESCAPE (overrides everything) ───────
-    # Per game-systems.md: 1.34 HP/sec damage — bot dies fast!
+    # Per game-systems.md: 1.34 HP/sec damage - bot dies fast!
     move_ep_cost = _get_move_ep_cost(region_terrain, region_weather)
     if region.get("isDeathZone", False):
         safe = _find_safe_region(connections, danger_ids, view)
@@ -631,9 +642,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             return {"action": "move", "data": {"regionId": safe},
                     "reason": "PRE-ESCAPE: Region becoming death zone soon"}
 
-    # ── Priority 2: Curse resolution — DISABLED in v1.5.2 ─────────
+    # ── Priority 2: Curse resolution - DISABLED in v1.5.2 ─────────
     # Curse is temporarily disabled. Guardians no longer curse players.
-    # Legacy code kept inert — will re-enable when curse returns.
+    # Legacy code kept inert - will re-enable when curse returns.
     # (was: _check_curse → whisper answer to guardian)
 
     # ── Priority 2b: Threat evasion (guardians + strong enemies + OUTNUMBERED) ───
@@ -747,7 +758,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         if should_flee_outnumbered:
             safe = _find_safe_region_with_exit(connections, danger_ids, view)
             if safe:
-                log.warning("🚨 OUTNUMBERED! %d enemies vs 1, mode=%s, threshold=%d — FLEEING!", 
+                log.warning(" OUTNUMBERED! %d enemies vs 1, mode=%s, threshold=%d - FLEEING!", 
                            enemy_count, aggression, outnumbered_threshold)
                 return {"action": "move", "data": {"regionId": safe},
                         "reason": f"OUTNUMBERED FLEE: {enemy_count} enemies vs 1 (mode={aggression})"}
@@ -1414,7 +1425,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     # ── Priority 9b: Strategic movement ────────────────────────────
     # COMBAT PRIORITY: Only move if no immediate combat opportunities
-    if enemies_in_range and w_range >= 1 and ep >= MIN_EP_FOR_COMBAT and can_afford_combat:
+    if enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and can_afford_combat:
         log.warning("🚨 COMBAT_PRIORITY: %d enemies in range but movement selected - FORCING COMBAT!", len(enemies_in_range))
         # Force attack instead of movement
         weakest = _select_weakest(enemies_in_range)
@@ -1425,7 +1436,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     "reason": f"FORCE_COMBAT: Attacking {weakest.get('name','?')} (range advantage) instead of movement"}
     
     # Only move if no immediate combat opportunities
-    if (not enemies_here and not enemies_in_range) or ep < MIN_EP_FOR_COMBAT:
+    if (not enemies_here and not enemies_in_range) or ep < COMBAT_MIN_EP:
         # In empty free rooms, avoid aimless wandering that wastes EP
         has_targets = (len(visible_items) > 0 or
                        any(f for f in interactables if isinstance(f, dict) and not f.get("isUsed")) or
@@ -1545,24 +1556,27 @@ def _estimate_enemy_strength(agent: dict) -> dict:
     """
     Comprehensive enemy strength estimation.
     
-    Returns dict with:
+    Returns dict with weapon info, threat assessment, etc.
+    """
+    # Extract enemy stats
+    hp = agent.get("hp", 100)
+    atk = agent.get("atk", 10)
+    defense = agent.get("def", 5)
+    ep = agent.get("ep", 10)
+    
+    # Weapon analysis
+    weapon = agent.get("equippedWeapon", {})
+    weapon_type = weapon.get("typeId", "fist").lower() if isinstance(weapon, dict) else "fist"
+    weapon_bonus = WEAPONS.get(weapon_type, {}).get("bonus", 0)
+    weapon_range = WEAPONS.get(weapon_type, {}).get("range", 0)
     
     # Calculate estimated damage
     my_def = 5  # Assume average defense
-    estimated_damage = calc_damage(enemy_atk, weapon_bonus, my_def)
+    estimated_damage = calc_damage(atk, weapon_bonus, my_def)
     
     # Estimate healing items (conservative: assume 0-2)
-    estimated_heals = min(2, max(0, (100 - enemy_hp) // 30))
-        for item in inventory:
-            if isinstance(item, dict):
-                item_type = item.get("typeId", "").lower()
-                if item_type in RECOVERY_ITEMS:
-                    estimated_heals += 1
-                    heal_potential += RECOVERY_ITEMS[item_type]
-    else:
-        # No inventory visibility - assume average player has 1-2 heals mid/late game
-        estimated_heals = 1 if hp > 50 else 0
-        heal_potential = estimated_heals * 25  # Average 25 HP per heal
+    estimated_heals = min(2, max(0, (100 - hp) // 30))
+    heal_potential = estimated_heals * 25  # Average 25 HP per heal
     
     # Effective HP = current HP + potential heal
     effective_hp = hp + heal_potential
@@ -1633,7 +1647,7 @@ def _get_adjacent_ids(region_obj, visible_regions: list = None) -> list:
 def _select_best_target(targets: list, my_atk: int, my_equipped,
                         my_def: int, weather: str,
                         my_hp: int = 100, alive_count: int = 100) -> dict | None:
-    """Smart target selection — pick the most favorable fight.
+    """Smart target selection - pick the most favorable fight.
     Returns dict with {agent, my_dmg, enemy_dmg, should_kite} or None.
     Priorities:
     1. Wounded enemies we can ONE-SHOT (free kill!)
@@ -2047,6 +2061,7 @@ def _check_equip(inventory: list, equipped) -> dict | None:
 
 def _find_safe_region(connections, danger_ids: set, view: dict = None) -> str | None:
     """Find nearest connected region that's NOT a death zone AND NOT pending DZ.
+    
     Per v1.5.2 gotchas.md §3: connectedRegions entries are EITHER full Region objects
     (when visible) OR bare string IDs (when out-of-vision). Use _resolve_region().
     danger_ids = set of all DZ + pending DZ region IDs.
