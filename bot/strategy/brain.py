@@ -393,16 +393,16 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
              is_ready_for_war, w_type or "fist")
 
     # Survival gate: do not let old/overfit DNA make the bot fight at reckless HP.
-    # Mode-based minimum HP for combat
+    # Mode-based minimum HP for combat - LOWERED for aggressive engagement
     aggression = AGGRESSION_LEVEL.lower() if AGGRESSION_LEVEL else "balanced"
     if aggression == "aggressive":
-        mode_hp_min = 35  # Combat mode: bisa bertarung lebih awal
+        mode_hp_min = 20  # Combat mode: engage much earlier
     elif aggression == "passive":
-        mode_hp_min = 60  # Survive mode: tunggu HP tinggi
+        mode_hp_min = 50  # Survive mode: more conservative
     else:
-        mode_hp_min = 50  # Balanced
+        mode_hp_min = 35  # Balanced: moderate engagement
     
-    phase_floor = 35 if alive_count <= 10 else (45 if alive_count <= 25 else 50)
+    phase_floor = 20 if alive_count <= 10 else (30 if alive_count <= 25 else 35)
     combat_hp_floor = max(strategy["combat_hp_threshold"], phase_floor, mode_hp_min)
     can_afford_combat = hp >= combat_hp_floor or (
         hp >= _get_combat_hp_threshold(alive_count, equipped) and is_ready_for_war
