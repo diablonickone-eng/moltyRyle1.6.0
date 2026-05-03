@@ -603,26 +603,29 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             enemy_effective_hp = enemy_strength["effective_hp"]
             threat_level = enemy_strength["threat_level"]
             
-            # ONLY attack if we have clear advantage or can one-shot
-            can_one_shot = enemy_effective_hp <= my_dmg  # Can kill even with heals
-            we_stronger = my_dmg > enemy_dmg * 1.2 and hp >= enemy_effective_hp * 0.8
-            is_finisher = enemy_hp < finisher_threshold  # Use raw HP for finisher check
-            
-            # NEW: Aggressive advantage exploitation - weapon vs fists is always worth attacking
-            has_weapon_advantage = has_weapon and enemy_strength["weapon_type"] == "fist"
-            huge_damage_advantage = my_dmg >= enemy_dmg * 2  # Double damage is huge advantage
-            
-            # IMPROVED: Consider EP advantage - if enemy has high EP, they can act more
-            ep_advantage = ep >= enemy_strength["ep"]
-            
-            log.info("🎯 ENEMY_ANALYSIS: %s | Threat=%d | EffectiveHP=%d | DMG=%d | EP=%d | Heals=%d | Wpn=%s",
-                     enemy_name, threat_level, enemy_effective_hp, enemy_dmg, 
-                     enemy_strength["ep"], enemy_strength["estimated_heals"], enemy_strength["weapon_type"])
-            
-            # AGGRESSIVE: Attack with any advantage + weapon vs fists
-            should_attack = (can_one_shot or we_stronger or is_finisher or 
-                           has_weapon_advantage or  # ANY weapon vs fists is worth attacking
-                           (has_weapon_advantage and huge_damage_advantage))
+            # SNIPER AGGRESSION: If we have sniper, ALWAYS attack regardless of stats
+            if w_type == "sniper":
+                should_attack = True
+                log.info("🎯 SNIPER_AGGRESSIVE: ALWAYS attack %s - Sniper range dominance!", enemy_name)
+            else:
+                # Non-sniper normal aggression rules
+                can_one_shot = enemy_effective_hp <= my_dmg  # Can kill even with heals
+                we_stronger = my_dmg > enemy_dmg * 1.2 and hp >= enemy_effective_hp * 0.8
+                is_finisher = enemy_hp < finisher_threshold  # Use raw HP for finisher check
+                
+                # NEW: Aggressive advantage exploitation - weapon vs fists is always worth attacking
+                has_weapon_advantage = has_weapon and enemy_strength["weapon_type"] == "fist"
+                huge_damage_advantage = my_dmg >= enemy_dmg * 2  # Double damage is huge advantage
+                
+                # IMPROVED: Consider EP advantage - if enemy has high EP, they can act more
+                ep_advantage = ep >= enemy_strength["ep"]
+                
+                log.info("🎯 ENEMY_ANALYSIS: %s | Threat=%d | EffectiveHP=%d | DMG=%d | EP=%d | Heals=%d | Wpn=%s",
+                         enemy_name, threat_level, enemy_effective_hp, enemy_dmg, 
+                         enemy_strength["ep"], enemy_strength["estimated_heals"], enemy_strength["weapon_type"])
+                
+                should_attack = (can_one_shot or we_stronger or is_finisher or 
+                               (has_weapon_advantage and huge_damage_advantage))
             
             if should_attack and ep_advantage:
                 attack_reason = "AGGRESSIVE" if has_weapon_advantage else "DEFENSIVE"
@@ -632,23 +635,32 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         "data": {"targetId": target["id"], "targetType": "agent"},
                         "reason": f"{attack_reason}: Attacking {enemy_name} (threat={threat_level}, effHP={enemy_effective_hp})"}
             else:
-                # ENHANCED FLEE LOGIC: Consider EP disadvantage and weapon advantage
+                # AGGRESSIVE SNIPER: Sniper never flees - range advantage eliminates all threats
                 reason_detail = []
-                should_flee = True
+                should_flee = False
                 
-                if not can_one_shot and not we_stronger and not is_finisher:
-                    reason_detail.append("stronger")
-                    should_flee = True
-                
-                # EP DISADVANTAGE: Enemy with low EP is less dangerous
-                if enemy_strength["ep"] <= 2:  # Enemy EP <= 2 = not much threat
-                    reason_detail.append("enemy_low_EP")
-                    should_flee = False  # Don't flee from low EP enemies
-                
-                # WEAPON ADVANTAGE: Don't flee if we have range advantage
-                if w_range >= 1 and enemy_strength["weapon_range"] == 0:  # We have ranged, enemy melee
-                    reason_detail.append("our_range_advantage")
-                    should_flee = False  # Don't flee from melee enemies with ranged weapon
+                # SNIPER DOMINANCE: If we have sniper, NEVER flee regardless of enemy stats
+                if w_type == "sniper":
+                    reason_detail.append("sniper_dominance")
+                    should_flee = False
+                    log.info("🎯 SNIPER_NO_FLEE: Sniper range advantage - NEVER flee from %s (HP=%s EP=%s W=%s)", 
+                             enemy_name, enemy_strength.get("hp", "?"), enemy_strength.get("ep", "?"), 
+                             enemy_strength.get("weapon_type", "fist"))
+                else:
+                    # Non-sniper normal flee logic
+                    if not can_one_shot and not we_stronger and not is_finisher:
+                        reason_detail.append("stronger")
+                        should_flee = True
+                    
+                    # EP DISADVANTAGE: Enemy with low EP is less dangerous
+                    if enemy_strength["ep"] <= 2:  # Enemy EP <= 2 = not much threat
+                        reason_detail.append("enemy_low_EP")
+                        should_flee = False  # Don't flee from low EP enemies
+                    
+                    # WEAPON ADVANTAGE: Don't flee if we have range advantage
+                    if w_range >= 1 and enemy_strength["weapon_range"] == 0:  # We have ranged, enemy melee
+                        reason_detail.append("our_range_advantage")
+                        should_flee = False  # Don't flee from melee enemies with ranged weapon
                 
                 if should_flee:
                     log.warning("🚨 STRONGER ENEMY! %s (Threat=%d, EffHP=%d, DMG=%d, EP=%d) > us — FLEE!",
@@ -691,12 +703,32 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         log.info("🚨 COMBAT_PRIORITY: Enemies nearby (%d here, %d in range) - skipping inventory management", 
                  len(enemies_here), len(enemies_in_range))
 
-    # ── Priority 2: IMMEDIATE COMBAT (Before cooldown check!) ─────────
-    # COMBAT URGENT: Attack enemies in range even during cooldown if possible
-    # This prevents missing kill opportunities due to cooldown timing
+    # ── Priority 2: AGGRESSIVE SNIPER COMBAT (Before cooldown check!) ─────────
+    # AGGRESSIVE SNIPER: Attack ANY enemy in range regardless of weapon/HP/EP
+    # Sniper advantage = range attack, no restrictions for sniper users
     weather_ok = region_weather not in ("storm", "fog") or w_range >= 1
     
-    if enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and weather_ok:
+    # AGGRESSIVE SNIPER RULE: If we have sniper and enemies in range, ALWAYS ATTACK
+    if w_type == "sniper" and enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and weather_ok:
+        log.info("🎯 AGGRESSIVE_SNIPER: %d enemies in range - KILL THEM ALL!", len(enemies_in_range))
+        
+        # Attack ANY enemy in range - no threat assessment for sniper
+        # Prioritize weakest for quick kills, but ANY target is acceptable
+        weakest = _select_weakest(enemies_in_range)
+        if weakest:
+            enemy_weapon = weakest.get("equippedWeapon", {}).get("typeId", "fist")
+            enemy_hp = weakest.get("hp", "?")
+            enemy_ep = weakest.get("ep", "?")
+            
+            log.info("🏹 SNIPER_KILL: Targeting %s (HP=%s EP=%s Weapon=%s) - SNIPER DOMINANCE!",
+                     weakest.get("name", "?"), enemy_hp, enemy_ep, enemy_weapon)
+            _track_attack(attack_type="ranged")
+            return {"action": "attack",
+                    "data": {"targetId": weakest["id"], "targetType": "agent"},
+                    "reason": f"SNIPER_KILL: {weakest.get('name','?')} (HP={enemy_hp} EP={enemy_ep} W={enemy_weapon}) - Sniper range advantage!"}
+    
+    # Non-sniper ranged combat (normal rules apply)
+    elif enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and weather_ok:
         log.info("🎯 URGENT_COMBAT: %d enemies in range - attempting attack!", len(enemies_in_range))
         
         # Try to attack even during cooldown - game will reject if not allowed
