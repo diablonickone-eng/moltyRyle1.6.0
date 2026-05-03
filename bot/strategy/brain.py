@@ -1050,11 +1050,14 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         return {"action": "rest", "data": {},
                 "reason": f"CAMPING: Resting at facility to recover (HP={hp} EP={ep})"}
 
-    # ── Priority 9: ACTIVE HUNTING (Late Game - seek out enemies!) ──
-    # Kalau late game dan tidak ada musuh di sekitar, proaktif cari musuh!
+    # ── Priority 9: ACTIVE HUNTING (All phases - seek out enemies!) ──
+    # Bot should ALWAYS hunt kills, not just late game! Target = maximum kills
     is_late_game = alive_count <= 25
     is_endgame = alive_count <= 10
-    if (is_late_game or is_endgame) and not enemies_here and hp >= 40 and ep >= 6:
+    is_ready_to_hunt = hp >= 30 and ep >= 4  # Lower threshold for aggressive hunting
+    
+    # Hunt at ALL game phases if ready and no enemies nearby
+    if is_ready_to_hunt and not enemies_here and not enemies_in_range:
         # Cari region dengan musuh untuk dihunt
         best_hunt_target = None
         best_hunt_score = -1
@@ -1068,6 +1071,10 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 score = 50 if enemy_count <= 2 else 10
                 if is_endgame:
                     score += 30  # Lebih aggressive di endgame
+                elif is_late_game:
+                    score += 20  # Moderate bonus late game
+                else:
+                    score += 40  # HIGH bonus for early game hunting!
                 if rid not in _visited_regions:
                     score += 20  # Prefer unexplored
                 if score > best_hunt_score:
@@ -1075,11 +1082,12 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     best_hunt_target = rid
         
         if best_hunt_target:
-            log.info("🎯 ACTIVE_HUNTING: Late game (%d alive), seeking enemies at %s", 
-                     alive_count, best_hunt_target[:8])
+            hunt_phase = "ENDGAME" if is_endgame else ("LATE_GAME" if is_late_game else "EARLY_GAME")
+            log.info("🎯 ACTIVE_HUNTING: %s (%d alive), seeking enemies at %s", 
+                     hunt_phase, alive_count, best_hunt_target[:8])
             _track_chase()
             return {"action": "move", "data": {"regionId": best_hunt_target},
-                    "reason": f"ACTIVE_HUNTING: Seeking fight in late game ({alive_count} alive)"}
+                    "reason": f"ACTIVE_HUNTING: Seeking kills ({hunt_phase}, {alive_count} alive)"}
 
     # ── Priority 9b: Strategic movement ────────────────────────────
     # Only move if there's something worth moving toward (items, facilities, enemies)
