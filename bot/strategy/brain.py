@@ -594,6 +594,10 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             we_stronger = my_dmg > enemy_dmg * 1.2 and hp >= enemy_effective_hp * 0.8
             is_finisher = enemy_hp < finisher_threshold  # Use raw HP for finisher check
             
+            # NEW: Aggressive advantage exploitation - weapon vs fists is always worth attacking
+            has_weapon_advantage = has_weapon and enemy_strength["weapon_type"] == "fist"
+            huge_damage_advantage = my_dmg >= enemy_dmg * 2  # Double damage is huge advantage
+            
             # IMPROVED: Consider EP advantage - if enemy has high EP, they can act more
             ep_advantage = ep >= enemy_strength["ep"]
             
@@ -601,12 +605,17 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                      enemy_name, threat_level, enemy_effective_hp, enemy_dmg, 
                      enemy_strength["ep"], enemy_strength["estimated_heals"], enemy_strength["weapon_type"])
             
-            if (can_one_shot or we_stronger or is_finisher) and ep_advantage:
-                log.info("⚔️ DEFENSIVE_ATTACK: %s in same region (Threat=%d) — attacking!", 
-                         enemy_name, threat_level)
+            # AGGRESSIVE: Attack with any advantage + weapon vs fists
+            should_attack = (can_one_shot or we_stronger or is_finisher or 
+                           (has_weapon_advantage and huge_damage_advantage))
+            
+            if should_attack and ep_advantage:
+                attack_reason = "AGGRESSIVE" if has_weapon_advantage else "DEFENSIVE"
+                log.info("⚔️ %s_ATTACK: %s in same region (Threat=%d, WeaponAdv=%s) — attacking!", 
+                         attack_reason, enemy_name, threat_level, has_weapon_advantage)
                 return {"action": "attack",
                         "data": {"targetId": target["id"], "targetType": "agent"},
-                        "reason": f"DEFENSIVE: Attacking {enemy_name} (threat={threat_level}, effHP={enemy_effective_hp})"}
+                        "reason": f"{attack_reason}: Attacking {enemy_name} (threat={threat_level}, effHP={enemy_effective_hp})"}
             else:
                 # Enemy stronger or has EP advantage - FLEE immediately
                 reason_detail = []
