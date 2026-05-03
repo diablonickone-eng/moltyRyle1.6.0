@@ -2079,6 +2079,43 @@ def _track_guardians(visible_agents: list, my_region: str):
             _guardian_locations[rid] = True  # Mark region as having guardian
 
 
+def _calculate_guardian_route_bonus(region_id: str, my_hp: int, has_weapon: bool, healing_count: int) -> int:
+    """Calculate exploration route bonus for guardian hunting.
+    Higher bonus for regions that lead to guardian locations safely.
+    """
+    global _guardian_locations, _visited_regions
+    
+    bonus = 0
+    
+    # Base bonus for having any guardian location known
+    if not _guardian_locations:
+        return 0
+    
+    # Check if this region is a direct path to guardian
+    if region_id in _guardian_locations:
+        bonus += 20  # Direct guardian location bonus
+    else:
+        # Check if this region connects to guardian regions
+        # This would require region connection data, simplified for now
+        bonus += 10  # Path towards guardian bonus
+    
+    # Combat readiness bonus
+    if has_weapon:
+        bonus += 5  # Weapon bonus for guardian hunting
+    
+    if healing_count >= 2:
+        bonus += 3  # Healing bonus for sustained hunting
+    
+    if my_hp >= 80:
+        bonus += 2  # HP bonus for aggressive hunting
+    
+    # Game phase bonus - more aggressive in late game
+    # (This would need alive_count parameter, simplified)
+    bonus += 5  # Late game aggression bonus
+    
+    return bonus
+
+
 def _find_safe_region_with_exit(connections, danger_ids: set, view: dict = None) -> str | None:
     """Find safe region that also has exit options (avoid dead ends).
     Used for retreat path planning.
@@ -2405,7 +2442,18 @@ def _choose_move_target(connections, danger_ids: set,
                 score += exit_options * 3
 
             # 6. GUARDIAN HUNTING & CENTER POSITIONING
-            if rid in _guardian_locations: score += 15
+            if rid in _guardian_locations: 
+                score += 15
+                log.info("🎯 GUARDIAN_ROUTE: %s has confirmed guardian location, +15", rid[:8])
+                
+                # ENHANCED: Plan exploration route towards guardian locations
+                # Calculate path distance to guardian regions
+                guardian_distance_bonus = _calculate_guardian_route_bonus(rid, my_hp, has_weapon, healing_count)
+                score += guardian_distance_bonus
+                
+                if guardian_distance_bonus > 0:
+                    log.info("🛡️ GUARDIAN_HUNT: %s route bonus +%d (HP=%d, Weapon=%s, Heals=%d)", 
+                             rid[:8], guardian_distance_bonus, my_hp, has_weapon, healing_count)
             
             # IMPROVED: Late game center vs edge strategy
             is_in_center = (_map_knowledge.get("revealed") and 
