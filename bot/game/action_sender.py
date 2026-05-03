@@ -2,7 +2,7 @@
 Action envelope builder + cooldown state tracker.
 Builds action messages per actions.md spec.
 """
-from bot.utils.logger import get_logger
+from bot.utils.logger import get_logger, sanitize_reason_for_ui
 
 log = get_logger(__name__)
 
@@ -41,12 +41,20 @@ class ActionSender:
         """
         Build action envelope per actions.md spec.
         Truncates thought fields to spec limits.
+        Sanitizes reasoning for UI to hide strategy details.
         """
+        # Log full reasoning locally for debugging
+        if reasoning:
+            log.info("🧠 ACTION_REASONING: %s", reasoning)
+        
+        # Sanitize reasoning for UI (hide strategy from other players)
+        ui_reasoning = sanitize_reason_for_ui(reasoning) if reasoning else ""
+        
         payload = {
             "type": "action",
             "data": {"type": action_type, **(data or {})},
             "thought": {
-                "reasoning": reasoning[:500],        # Max 500 chars
+                "reasoning": ui_reasoning[:500],        # Max 500 chars (sanitized)
                 "plannedAction": planned_action[:200],  # Max 200 chars
             },
         }
