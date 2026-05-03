@@ -697,15 +697,15 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                              enemy_strength["ep"], w_range)
                     # Don't flee - stand ground and fight
 
-    # ── Priority 5: COMBAT PREPARATION (Equip weapons before fighting!) ─────────
-    # CRITICAL: Auto-equip weapon when enemies detected - combat readiness!
-    if (enemies_here or enemies_in_range) and not equipped:
+    # ── Priority 5: COMBAT PREPARATION (Equip weapons immediately!) ─────────
+    # CRITICAL: Auto-equip weapon anytime available - always be ready for combat!
+    if not equipped:
         equip_action = _check_equip(inventory, equipped)
         if equip_action:
-            log.info("⚔️ COMBAT_PREP: Enemies detected - equipping weapon for combat!")
+            log.info("⚔️ COMBAT_PREP: Auto-equipping weapon - always be combat ready!")
             return equip_action
 
-    # ── Priority 5b: Free actions (pickup, equip) ─────────────────
+    # ── Priority 5b: Free actions (pickup, heal) ─────────────────
     # COMBAT PRIORITY: Only do free actions if NO enemies nearby!
     # If enemies in range, combat takes priority over inventory management
     if not enemies_here and not enemies_in_range:  # Safe to loot/interact
@@ -718,11 +718,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         pickup_action = _check_pickup(visible_items, inventory, region_id)
         if pickup_action:
             return pickup_action
-
-    # Auto-equip better weapon (higher priority than pickup)
-    equip_action = _check_equip(inventory, equipped)
-    if equip_action:
-        return equip_action
     
     # Use utility items: Map (reveal map), Megaphone (broadcast)
     util_action = _use_utility_item(inventory, hp, ep, alive_count)
