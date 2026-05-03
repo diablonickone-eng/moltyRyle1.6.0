@@ -424,6 +424,11 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if not is_alive:
         return None  # Dead — wait for game_ended
 
+    # COOLDOWN CHECK: Don't attempt actions during cooldown to prevent blacklist
+    if not can_act:
+        log.info("COOLDOWN_WAIT: Waiting for cooldown to expire (canAct=False)")
+        return None  # Wait for cooldown
+
     # Log current region state for debugging
     fac_types = [f.get("type",f.get("typeId","?")) for f in interactables if isinstance(f, dict)]
     enemies_here_names = [e.get("name", e.get("id","?")[:8]) for e in enemies_here]

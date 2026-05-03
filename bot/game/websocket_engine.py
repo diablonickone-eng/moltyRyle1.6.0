@@ -280,13 +280,16 @@ class WebSocketEngine:
                 err_msg = err.get("message", "") if isinstance(err, dict) else ""
                 log.warning("Action FAILED: %s — %s (canAct=%s)", err_code, err_msg, msg.get("canAct"))
                 
-                # Report failure to brain to avoid spamming
-                if self.last_sent_action:
+                # Report failure to brain to avoid spamming (except for cooldown failures)
+                if self.last_sent_action and err_code != "ACTION_COOLDOWN":
                     from bot.strategy.brain import track_failed_action
                     track_failed_action(
                         self.last_sent_action.get("type"),
                         self.last_sent_action.get("itemId")
                     )
+                elif err_code == "ACTION_COOLDOWN":
+                    log.info("COOLDOWN_FAILURE: Not blacklisting %s action due to cooldown", 
+                             self.last_sent_action.get("type", "unknown"))
 
         # ── can_act_changed ───────────────────────────────────────────
         # Per actions.md: canAct is at TOP LEVEL
