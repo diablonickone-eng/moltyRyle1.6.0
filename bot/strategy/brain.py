@@ -158,7 +158,7 @@ def _get_region_id(entry) -> str:
 
 def reset_game_state():
     """Reset per-game tracking state. Call when game ends."""
-    global _known_agents, _map_knowledge, _visited_regions, _guardian_locations, _planned_next_action, _failed_actions, _current_turn, _combat_metrics
+    global _known_agents, _map_knowledge, _visited_regions, _guardian_locations, _planned_next_action, _failed_actions, _current_turn, _combat_metrics, _combat_hotspots
     # Log final metrics before reset
     _log_combat_metrics()
     _known_agents = {}
@@ -168,6 +168,7 @@ def reset_game_state():
     _planned_next_action = None
     _failed_actions = {}
     _current_turn = 0
+    _combat_hotspots = {}  # NEW: Track active combat zones
     # Reset metrics for new game
     _combat_metrics = {
         "attacks_attempted": 0, "attacks_successful": 0, "kills": 0, "deaths": 0,
@@ -327,6 +328,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     # NEW: Detect guardians from whisper messages (they whisper from their location)
     _detect_guardians_from_whispers(messages, region_id, connected_regions, visible_regions)
+    
+    # NEW: Track combat events for exploration decisions
+    combat_hotspots = _track_combat_hotspots(messages, region_id)
 
     # Combat/Aggression pre-calculations
     enemies = [a for a in visible_agents if not a.get("isGuardian") and a.get("isAlive") and a.get("id") != self_data.get("id")]
@@ -2103,6 +2107,109 @@ def _track_guardians(visible_agents: list, my_region: str):
             _guardian_locations[rid] = True  # Mark region as having guardian
 
 
+def _track_combat_hotspots(messages: list, current_region: str) -> dict:
+    """Track combat events to identify active fighting zones for exploration decisions.
+    Returns dict of region_id -> combat_intensity_score
+    """
+    global _combat_hotspots
+    
+    # Initialize or decay existing hotspots
+    if not hasattr(_track_combat_hotspots, '_last_update'):
+        _track_combat_hotspots._last_update = 0
+        _combat_hotspots = {}
+    
+    # Decay old combat hotspots (reduce intensity over time)
+    for region_id in list(_combat_hotspots.keys()):
+        _combat_hotspots[region_id] = max(0, _combat_hotspots[region_id] - 2)
+        if _combat_hotspots[region_id] <= 0:
+            del _combat_hotspots[region_id]
+    
+    # Process new combat events
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+            
+        event_type = msg.get("eventType", "").lower()
+        if event_type not in ("agent_attacked", "combat", "attack", "damage_dealt"):
+            continue
+            
+        data = msg.get("data", {})
+        
+        # Try to extract location from combat event
+        # Combat events might include region information
+        event_region = data.get("regionId") or data.get("location") or current_region
+        
+        # If no explicit region, assume current region (combat in vision range)
+        if not event_region:
+            event_region = current_region
+        
+        # Calculate combat intensity based on event type and damage
+        intensity = 0
+        if event_type == "agent_attacked":
+            intensity = 8  # High intensity - direct combat
+        elif event_type == "damage_dealt":
+            damage = data.get("damage") or data.get("dmg") or 0
+            try:
+                damage_val = int(damage) if damage else 0
+                intensity = min(10, damage_val // 5)  # Scale with damage
+            except (ValueError, TypeError):
+                intensity = 5
+        elif event_type == "combat":
+            intensity = 6  # Moderate intensity
+        elif event_type == "attack":
+            intensity = 4  # Lower intensity
+        
+        # Check if this is a kill event (higher intensity)
+        is_kill = data.get("isKill") or data.get("killed") or False
+        if is_kill:
+            intensity += 5  # Bonus for kill events
+        
+        # Update combat hotspot intensity
+        if event_region and intensity > 0:
+            _combat_hotspots[event_region] = _combat_hotspots.get(event_region, 0) + intensity
+            log.info("⚔️ COMBAT_HOTSPOT: %s intensity +%d (event=%s, kill=%s)", 
+                     event_region[:8], intensity, event_type, is_kill)
+    
+    _track_combat_hotspots._last_update = len(messages)
+    return _combat_hotspots
+
+
+def _calculate_combat_hotspot_bonus(region_id: str, my_hp: int, has_weapon: bool, healing_count: int) -> int:
+    """Calculate exploration bonus for regions with active combat.
+    Higher bonus for combat hotspots when ready for fighting.
+    """
+    global _combat_hotspots
+    
+    if not _combat_hotspots or region_id not in _combat_hotspots:
+        return 0
+    
+    combat_intensity = _combat_hotspots[region_id]
+    bonus = 0
+    
+    # Base bonus from combat intensity
+    bonus += min(20, combat_intensity // 2)  # Cap at 20 points
+    
+    # Combat readiness multiplier
+    if has_weapon:
+        bonus = int(bonus * 1.5)  # 50% bonus if armed
+        log.info("🗡️ COMBAT_READY: %s armed, bonus +%d", region_id[:8], bonus)
+    
+    if healing_count >= 2:
+        bonus = int(bonus * 1.2)  # 20% bonus if healed
+        log.info("💚 COMBAT_HEALED: %s has healing, bonus +%d", region_id[:8], bonus)
+    
+    if my_hp >= 80:
+        bonus = int(bonus * 1.3)  # 30% bonus if healthy
+        log.info("❤️ COMBAT_HEALTHY: %s HP=%d, bonus +%d", region_id[:8], my_hp, bonus)
+    
+    # Risk assessment - reduce bonus if low HP
+    if my_hp < 40:
+        bonus = int(bonus * 0.5)  # 50% penalty if low HP
+        log.warning("⚠️ COMBAT_RISK: %s HP=%d low, reduced bonus +%d", region_id[:8], my_hp, bonus)
+    
+    return max(0, bonus)
+
+
 def _calculate_guardian_route_bonus(region_id: str, my_hp: int, has_weapon: bool, healing_count: int) -> int:
     """Calculate exploration route bonus for guardian hunting.
     Higher bonus for regions that lead to guardian locations safely.
@@ -2472,7 +2579,14 @@ def _choose_move_target(connections, danger_ids: set,
                 # Normal mode: moderate bonus for exits
                 score += exit_options * 3
 
-            # 6. GUARDIAN HUNTING & CENTER POSITIONING
+            # 6. COMBAT HOTSPOT DETECTION (NEW)
+            # Track active combat zones for strategic positioning
+            combat_hotspot_bonus = _calculate_combat_hotspot_bonus(rid, my_hp, has_weapon, healing_count)
+            if combat_hotspot_bonus > 0:
+                score += combat_hotspot_bonus
+                log.info("⚔️ COMBAT_HOTSPOT: %s has active combat, bonus +%d", rid[:8], combat_hotspot_bonus)
+
+            # 7. GUARDIAN HUNTING & CENTER POSITIONING
             if rid in _guardian_locations: 
                 score += 15
                 log.info("🎯 GUARDIAN_ROUTE: %s has confirmed guardian location, +15", rid[:8])
