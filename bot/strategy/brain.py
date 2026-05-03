@@ -822,48 +822,63 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # ── Priority 4b: PHASE-BASED COMBAT LOGIC ─────────────────────────────────
     # EARLY GAME: Avoid combat, focus on weapon search and loot
     if phase_strategy == "WEAPON_SEARCH":
+        # COMBAT HOTSPOT AWARENESS: Check current region combat intensity
+        global _combat_hotspots
+        current_combat_intensity = _combat_hotspots.get(region_id, 0) if _combat_hotspots else 0
+        
         if enemies_here and not equipped:
             # No weapon, avoid combat at all costs
             log.info("🔍 EARLY_GAME: No ⚔️weapon - avoiding combat, searching for gear")
             safe = _find_safe_region_with_exit(connections, danger_ids, view)
             if safe and ep >= move_ep_cost:
+                # Prefer safe regions without combat hotspots
+                safe_combat_intensity = _combat_hotspots.get(safe, 0) if _combat_hotspots else 0
+                if current_combat_intensity > 5 and safe_combat_intensity < 3:
+                    log.info("🔍 EARLY_HOTSPOT_FLEE: Leaving combat zone %s (intensity=%d) for safe %s", 
+                             region_id[:8], current_combat_intensity, safe[:8])
                 return {"action": "move", "data": {"regionId": safe},
                         "reason": "EARLY_GAME: Avoid combat without weapon"}
         elif enemies_here and equipped:
             # Has weapon but still early - be very selective
             weapon_strategy = _get_weapon_strategy(equipped)
-            if weapon_strategy["style"] in ["melee_defensive", "ranged_defensive"]:
-                log.info("🔍 EARLY_GAME: Defensive ⚔️weapon - avoiding combat")
+            if weapon_strategy["style"] in ["melee_defensive", "ranged_defensive"] or current_combat_intensity > 8:
+                log.info("🔍 EARLY_GAME: Defensive ⚔️weapon or high combat intensity (%d) - avoiding combat", 
+                         current_combat_intensity)
                 safe = _find_safe_region_with_exit(connections, danger_ids, view)
                 if safe and ep >= move_ep_cost:
                     return {"action": "move", "data": {"regionId": safe},
                             "reason": "EARLY_GAME: Defensive weapon avoiding combat"}
-                    # Non-sniper normal flee logic
-                    if not can_one_shot and not we_stronger and not is_finisher:
-                        reason_detail.append("stronger")
-                        should_flee = True
-                    
-                    # EP DISADVANTAGE: Enemy with low EP is less dangerous
-                    if enemy_strength["ep"] <= 2:  # Enemy EP <= 2 = not much threat
-                        reason_detail.append("enemy_low_EP")
-                        should_flee = False  # Don't flee from low EP enemies
-                    
-                    # WEAPON ADVANTAGE: Don't flee if we have range advantage
-                    if w_range >= 1 and enemy_strength["weapon_range"] == 0:  # We have ranged, enemy melee
-                        reason_detail.append("our_range_advantage")
-                        should_flee = False  # Don't flee from melee enemies with ranged weapon
+        
+        # Early game exploration: actively avoid combat hotspots
+        if not enemies_here and current_combat_intensity > 5:
+            log.info("🔍 EARLY_HOTSPOT_ABANDON: Leaving high-intensity area %s (intensity=%d) - early game", 
+                     region_id[:8], current_combat_intensity)
+            safe = _find_safe_region_with_exit(connections, danger_ids, view)
+            if safe and ep >= move_ep_cost:
+                return {"action": "move", "data": {"regionId": safe},
+                        "reason": "EARLY_GAME: Abandon combat hotspot for safety"}
+    
+    # MID-HIGH GAME: Use weapon-specific logic
+    elif phase_strategy in ["WEAPON_SPECIFIC", "COMBAT_DOMINANCE"]:
+        if enemies_here and equipped:
+            # Use weapon-specific decision making
+            for enemy in enemies_here:
+                should_engage, reason = _should_engage_enemy(enemy, hp, ep, equipped, 
+                                                           AGGRESSION_LEVEL, region_weather)
                 
-                if should_flee:
-                    log.warning("🚨 STRONGER ENEMY! %s (Threat=%d, EffHP=%d, DMG=%d, EP=%d) > us — FLEE!",
-                               enemy_name, threat_level, enemy_effective_hp, enemy_dmg, enemy_strength["ep"])
-                    safe = _find_safe_region_with_exit(connections, danger_ids, view)
-                    if safe and ep >= move_ep_cost:
-                        return {"action": "move", "data": {"regionId": safe},
-                                "reason": f"FLEE: {enemy_name} threat={threat_level} ({', '.join(reason_detail)})"}
-                else:
-                    log.info("🛡️ NO_FLEE: Enemy strong but我们有 advantages (EP=%d, Range=%d) - STANDING GROUND!", 
-                             enemy_strength["ep"], w_range)
-                    # Don't flee - stand ground and fight
+                if should_engage:
+                    # Check if we should flee instead
+                    should_flee, flee_reason = _should_flee_from_enemy(enemy, hp, equipped, 
+                                                                       AGGRESSION_LEVEL)
+                    
+                    if not should_flee:
+                        log.info("⚔️ %s: Engaging %s - %s", 
+                                 _get_weapon_strategy(equipped)["style"].upper(),
+                                 enemy.get("name", "?"), reason)
+                        _track_attack(attack_type="melee")
+                        return {"action": "attack",
+                                "data": {"targetId": enemy["id"], "targetType": "agent"},
+                                "reason": f"{_get_weapon_strategy(equipped)['style'].upper()}: {enemy.get('name','?')} - {reason}"}
 
     # ── Priority 5: COMBAT PREPARATION (Equip weapons immediately!) ─────────
     # CRITICAL: Auto-equip weapon anytime available - always be ready for combat!
@@ -1510,9 +1525,24 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 resolved = _resolve_region(conn, {"visibleRegions": visible_regions})
                 terrain = resolved.get("terrain", "").lower() if resolved else ""
                 
+                # COMBAT HOTSPOT INTEGRATION: Check combat intensity
+                combat_intensity = _combat_hotspots.get(rid, 0) if _combat_hotspots else 0
+                
+                # Early game: avoid combat hotspots even for exploration
+                if alive_count >= 80 and combat_intensity > 5:
+                    log.info("🔍 EXPLORE_AVOID_HOTSPOT: Skipping %s (intensity=%d) - early game", 
+                             rid[:8], combat_intensity)
+                    continue
+                
+                # High game: prefer combat hotspots when ready
+                if alive_count < 30 and has_weapon and healing_count >= 1 and combat_intensity > 3:
+                    log.info("👑 EXPLORE_SEEK_HOTSPOT: Prioritizing %s (intensity=%d) - high game", 
+                             rid[:8], combat_intensity)
+                
                 # Avoid dangerous terrain when not ready for combat
                 if terrain not in ("water",) or (has_weapon and healing_count >= 1):
-                    log.info("EXPLORE_NEW: Moving to unvisited %s (terrain=%s)", rid[:8], terrain)
+                    hotspot_info = f" (combat={combat_intensity})" if combat_intensity > 0 else ""
+                    log.info("EXPLORE_NEW: Moving to unvisited %s (terrain=%s)%s", rid[:8], terrain, hotspot_info)
                     _consecutive_idle_turns = 0
                     decide_action._consecutive_idle_turns = 0
                     return {"action": "move", "data": {"regionId": rid},
@@ -2697,6 +2727,10 @@ def _choose_move_target(connections, danger_ids: set,
             score += item_region_scores.get(conn, 0)
             score += distant_direction_bonus.get(conn, 0)
             
+            # COMBAT HOTSPOT INTEGRATION
+            combat_bonus = _calculate_combat_hotspot_bonus(conn, my_hp, has_weapon, healing_count)
+            score += combat_bonus
+            
             # VISITED REGION PENALTY
             is_new = conn not in _visited_regions
             if not is_new:
@@ -2704,13 +2738,30 @@ def _choose_move_target(connections, danger_ids: set,
             else:
                 score += new_region_bonus
 
+            # Phase-based combat hotspot behavior
+            global _combat_hotspots
+            combat_intensity = _combat_hotspots.get(conn, 0) if _combat_hotspots else 0
+            
+            # Early game: avoid combat hotspots
+            if alive_count >= 80 and combat_intensity > 5:
+                score -= combat_intensity * 2  # Heavy penalty for early game combat zones
+                log.info("🔍 EARLY_HOTSPOT_AVOID: %s intensity=%d, penalty=%d", 
+                         conn[:8], combat_intensity, combat_intensity * 2)
+            
+            # High game: seek combat hotspots when ready
+            elif alive_count < 30 and is_ready_for_war and combat_intensity > 3:
+                score += combat_intensity  # Bonus for high game combat zones
+                log.info("👑 HIGH_HOTSPOT_SEEK: %s intensity=%d, bonus=%d", 
+                         conn[:8], combat_intensity, combat_intensity)
+
             candidates.append({
                 "id": conn,
                 "name": conn[:8],
                 "score": score,
                 "enemies": enemy_region_count.get(conn, 0),
                 "intel": [],
-                "is_new": is_new
+                "is_new": is_new,
+                "combat_intensity": combat_intensity
             })
 
         elif isinstance(conn, dict):
