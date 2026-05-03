@@ -1,13 +1,13 @@
 {
-  "cycle": 12,
+  "cycle": 13,
   "strategy_changes": {
-    "aggression_level": 0.7,
-    "weak_enemy_threshold": 40,
-    "ep_conservation_threshold": 28
+    "aggression_level": 0.9900000000000001,
+    "weak_enemy_threshold": 55,
+    "ep_conservation_threshold": 22
   },
   "performance_summary": {
-    "recent_kd_ratio": 0.0,
+    "recent_kd_ratio": 0.3333333333333333,
     "games_analyzed": 11,
-    "last_optimization": 1777785500.1440191
+    "last_optimization": 1777796871.30334
   }
 }

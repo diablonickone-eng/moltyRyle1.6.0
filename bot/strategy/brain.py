@@ -1246,27 +1246,51 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     return {"action": "move", "data": {"regionId": rid},
                             "reason": "EXPLORE: Forcing move to unvisited region"}
 
-    log.info("IDLE: Staying in place (EP=%d, Targets=%s)", ep, has_targets)
-
-    # ── Priority 9b: BOREDOM MOVEMENT ───────────────────────────────
-    # If staying idle too long with full EP, force movement to random safe region
-    # This prevents getting stuck when all nearby regions visited
+    # ── Priority 9b: CONTINUOUS EXPLORATION (No Idle Behavior) ─────────────
+    # ALWAYS explore when no enemies detected and EP is sufficient
+    # Only rest when EP is critically low or weather is severe
     _consecutive_idle_turns = getattr(decide_action, '_consecutive_idle_turns', 0)
     
-    if not has_targets and ep >= 8 and not enemies_here:
-        _consecutive_idle_turns += 1
-        if _consecutive_idle_turns >= 3:  # 3 turns idle with full EP
-            # Force move to any random safe connected region
-            for conn in connections:
-                rid = _get_region_id(conn)
-                if rid and rid not in danger_ids and rid != region_id:
-                    log.info("BOREDOM_MOVE: Forcing movement after %d idle turns", _consecutive_idle_turns)
+    if not has_targets and ep >= move_ep_cost and not enemies_here:
+        # FORCE EXPLORATION: Never stay idle when EP is sufficient and no enemies
+        log.info("EXPLORE_FORCE: No targets detected, EP=%d sufficient - forcing exploration", ep)
+        
+        # Try unvisited regions first
+        for conn in connections:
+            rid = _get_region_id(conn)
+            if rid and rid not in danger_ids and rid not in _visited_regions and rid != region_id:
+                resolved = _resolve_region(conn, {"visibleRegions": visible_regions})
+                terrain = resolved.get("terrain", "").lower() if resolved else ""
+                
+                # Avoid dangerous terrain when not ready for combat
+                if terrain not in ("water",) or (has_weapon and healing_count >= 1):
+                    log.info("EXPLORE_NEW: Moving to unvisited %s (terrain=%s)", rid[:8], terrain)
                     _consecutive_idle_turns = 0
                     decide_action._consecutive_idle_turns = 0
                     return {"action": "move", "data": {"regionId": rid},
-                            "reason": "BOREDOM: Forcing move after idle with full EP"}
+                            "reason": f"EXPLORE: Seeking new region (terrain={terrain})"}
+        
+        # If all visited, move to any safe connected region
+        for conn in connections:
+            rid = _get_region_id(conn)
+            if rid and rid not in danger_ids and rid != region_id:
+                resolved = _resolve_region(conn, {"visibleRegions": visible_regions})
+                terrain = resolved.get("terrain", "").lower() if resolved else ""
+                
+                log.info("EXPLORE_ANY: Moving to any safe region %s (terrain=%s)", rid[:8], terrain)
+                _consecutive_idle_turns = 0
+                decide_action._consecutive_idle_turns = 0
+                return {"action": "move", "data": {"regionId": rid},
+                        "reason": f"EXPLORE: Continuous exploration (terrain={terrain})"}
+    
+    # Only increment idle counter if truly no movement possible
+    if not has_targets and ep < move_ep_cost:
+        _consecutive_idle_turns += 1
+        log.info("IDLE_FORCED: EP too low for movement (%d < %d), idle turn %d", 
+                 ep, move_ep_cost, _consecutive_idle_turns)
     else:
         _consecutive_idle_turns = 0
+    
     decide_action._consecutive_idle_turns = _consecutive_idle_turns
 
     # ── Priority 10: Rest (EP < 4 and safe) ───────────────────────
@@ -2082,26 +2106,33 @@ def _track_guardians(visible_agents: list, my_region: str):
 def _calculate_guardian_route_bonus(region_id: str, my_hp: int, has_weapon: bool, healing_count: int) -> int:
     """Calculate exploration route bonus for guardian hunting.
     Higher bonus for regions that lead to guardian locations safely.
+    ONLY applies when guardians are actually detected.
     """
     global _guardian_locations, _visited_regions
     
     bonus = 0
     
-    # Base bonus for having any guardian location known
+    # CRITICAL: Only apply guardian bonus when guardians are actually detected
     if not _guardian_locations:
-        return 0
+        return 0  # No guardians detected = no guardian hunting priority
     
     # Check if this region is a direct path to guardian
     if region_id in _guardian_locations:
         bonus += 20  # Direct guardian location bonus
+        log.info("🎯 GUARDIAN_DIRECT: %s has confirmed guardian, +20", region_id[:8])
     else:
         # Check if this region connects to guardian regions
-        # This would require region connection data, simplified for now
+        # Only apply if we have confirmed guardian locations
         bonus += 10  # Path towards guardian bonus
+        log.info("🛡️ GUARDIAN_PATH: %s leads towards guardian regions, +10", region_id[:8])
     
-    # Combat readiness bonus
+    # Combat readiness bonus - only if we can actually fight guardians
     if has_weapon:
         bonus += 5  # Weapon bonus for guardian hunting
+    else:
+        # No weapon = reduced guardian hunting priority
+        bonus = max(0, bonus - 10)  # Reduce bonus significantly
+        log.info("⚠️ GUARDIAN_NO_WEAPON: %s - no weapon, reduced priority", region_id[:8])
     
     if healing_count >= 2:
         bonus += 3  # Healing bonus for sustained hunting
@@ -2113,7 +2144,7 @@ def _calculate_guardian_route_bonus(region_id: str, my_hp: int, has_weapon: bool
     # (This would need alive_count parameter, simplified)
     bonus += 5  # Late game aggression bonus
     
-    return bonus
+    return max(0, bonus)  # Ensure no negative bonuses
 
 
 def _find_safe_region_with_exit(connections, danger_ids: set, view: dict = None) -> str | None:
