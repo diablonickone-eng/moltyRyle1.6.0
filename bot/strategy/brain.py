@@ -76,6 +76,93 @@ WEATHER_COMBAT_PENALTY = {
     "storm": 0.15,  # -15%
 }
 
+# ── Weapon-Specific Strategy Configurations ─────────────────────────────
+WEAPON_STRATEGIES = {
+    "sniper": {
+        "range": 2,
+        "damage": 30,
+        "style": "ranged_aggressive",
+        "engagement_range": 2,  # Maximum engagement range
+        "min_hp_threshold": 20,  # Fight even with low HP
+        "flee_threshold": 0.1,  # Very low flee chance
+        "finisher_threshold": 40,  # Lower finisher threshold
+        "priority_targets": "any",  # Attack any target regardless of stats
+        "movement_style": "kiting",  # Keep distance
+        "combat_preference": "offensive",  # Always attack
+    },
+    "katana": {
+        "range": 0,
+        "damage": 25,
+        "style": "melee_aggressive",
+        "engagement_range": 0,  # Same region only
+        "min_hp_threshold": 40,  # Higher HP threshold for melee
+        "flee_threshold": 0.3,  # Moderate flee chance
+        "finisher_threshold": 35,  # Lower finisher threshold
+        "priority_targets": "weaker",  # Target weaker enemies
+        "movement_style": "closing",  # Close distance
+        "combat_preference": "aggressive",  # Strong melee preference
+    },
+    "sword": {
+        "range": 0,
+        "damage": 20,
+        "style": "melee_balanced",
+        "engagement_range": 0,  # Same region only
+        "min_hp_threshold": 50,  # Balanced HP threshold
+        "flee_threshold": 0.4,  # Moderate flee chance
+        "finisher_threshold": 45,  # Standard finisher threshold
+        "priority_targets": "balanced",  # Balanced target selection
+        "movement_style": "tactical",  # Tactical positioning
+        "combat_preference": "balanced",  # Balanced approach
+    },
+    "dagger": {
+        "range": 0,
+        "damage": 15,
+        "style": "melee_fast",
+        "engagement_range": 0,  # Same region only
+        "min_hp_threshold": 60,  # High HP threshold for weak weapon
+        "flee_threshold": 0.6,  # High flee chance
+        "finisher_threshold": 55,  # High finisher threshold
+        "priority_targets": "finishers",  # Target very weak enemies
+        "movement_style": "hit_and_run",  # Quick strikes
+        "combat_preference": "opportunistic",  # Only favorable fights
+    },
+    "pistol": {
+        "range": 1,
+        "damage": 18,
+        "style": "ranged_balanced",
+        "engagement_range": 1,  # Adjacent regions
+        "min_hp_threshold": 45,  # Balanced HP threshold
+        "flee_threshold": 0.4,  # Moderate flee chance
+        "finisher_threshold": 50,  # Standard finisher threshold
+        "priority_targets": "balanced",  # Balanced target selection
+        "movement_style": "positioning",  # Good positioning
+        "combat_preference": "tactical",  # Tactical ranged combat
+    },
+    "bow": {
+        "range": 1,
+        "damage": 12,
+        "style": "ranged_defensive",
+        "engagement_range": 1,  # Adjacent regions
+        "min_hp_threshold": 55,  # Higher HP threshold for weak ranged
+        "flee_threshold": 0.5,  # Higher flee chance
+        "finisher_threshold": 60,  # High finisher threshold
+        "priority_targets": "finishers",  # Target weak enemies
+        "movement_style": "kiting",  # Keep distance
+        "combat_preference": "defensive",  # Defensive ranged combat
+    },
+    "fist": {
+        "range": 0,
+        "damage": 5,
+        "style": "melee_defensive",
+        "engagement_range": 0,  # Same region only
+        "min_hp_threshold": 80,  # Very high HP threshold
+        "flee_threshold": 0.8,  # Very high flee chance
+        "finisher_threshold": 70,  # Very high finisher threshold
+        "priority_targets": "finishers",  # Only very weak enemies
+        "movement_style": "evasive",  # Avoid combat
+        "combat_preference": "defensive",  # Only fight when necessary
+    }
+}
 
 def calc_damage(atk: int, weapon_bonus: int, target_def: int,
                 weather: str = "clear") -> int:
@@ -234,6 +321,11 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     """
     Main decision engine. Returns action dict or None (wait).
 
+    PHASE-BASED STRATEGY SYSTEM:
+    1. [EARLY] Focus on weapon search and loot, avoid battles
+    2. [MID-HIGH] Use weapon-specific logic when armed
+    3. [HIGH] Prioritize sniper/katana combat dominance
+
     Priority chain per game-loop.md section 3 (v1.5.2):
     1. DEATHZONE ESCAPE (overrides everything - 1.34 HP/sec!)
     1b. Pre-escape pending death zone
@@ -254,6 +346,25 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     """
     global _current_turn
     _current_turn += 1
+
+    # ── PHASE-BASED STRATEGY SELECTION ─────────────────────────────────
+    self_data = view.get("self", {})
+    alive_count = view.get("aliveCount", 100)
+    equipped = self_data.get("equippedWeapon")
+    
+    # Determine game phase
+    if alive_count >= 80:
+        game_phase = "EARLY"
+        phase_strategy = "WEAPON_SEARCH"
+    elif alive_count >= 30:
+        game_phase = "MID"
+        phase_strategy = "WEAPON_SPECIFIC"
+    else:
+        game_phase = "HIGH"
+        phase_strategy = "COMBAT_DOMINANCE"
+    
+    log.info("🎮 PHASE_STRATEGY: %s game (%d alive) - %s strategy", 
+             game_phase, alive_count, phase_strategy)
 
     self_data = view.get("self", {})
     region = view.get("currentRegion", {})
@@ -424,8 +535,44 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if not is_alive:
         return None  # Dead — wait for game_ended
 
+    # CRITICAL EMERGENCY HEALING: Heal immediately when HP is critically low
+    # This bypasses all other logic including cooldown - survival first!
+    if hp <= 10:  # CRITICAL: HP <= 10 = immediate heal regardless of situation
+        heal = _find_healing_item(inventory, critical=True)
+        if heal:
+            log.critical("💀 CRITICAL_HEAL: HP=%d critically low - IMMEDIATE HEAL!", hp)
+            return {"action": "use_item", "data": {"itemId": heal["id"]},
+                    "reason": f"CRITICAL HEAL: HP={hp} - SURVIVAL PRIORITY!"}
+        else:
+            log.critical("💀 CRITICAL_DANGER: HP=%d but NO HEALS available!", hp)
+
+    # EMERGENCY COMBAT CHECK: Check if we're under attack even during cooldown
+    recent_damage = getattr(decide_action, '_recent_damage_taken', 0)
+    under_attack = recent_damage > 0
+    
     # COOLDOWN CHECK: Don't attempt actions during cooldown to prevent blacklist
     if not can_act:
+        if under_attack and enemies_here and ep >= COMBAT_MIN_EP:
+            log.warning("🚨 EMERGENCY_COMBAT: Under attack (damage=%d) during cooldown - attempting emergency response!", recent_damage)
+            # Try emergency actions even during cooldown when under attack
+            # Priority 1: Emergency healing if critical
+            if hp < 40:
+                heal = _find_healing_item(inventory, critical=True)
+                if heal:
+                    log.warning("💊 EMERGENCY_HEAL: Critical HP=%d, using heal during attack!", hp)
+                    return {"action": "use_item", "data": {"itemId": heal["id"]},
+                            "reason": f"EMERGENCY HEAL: Critical HP ({hp}) under attack"}
+            
+            # Priority 2: Emergency counter attack if armed
+            if equipped:
+                target = _select_weakest(enemies_here)
+                if target:
+                    log.warning("⚔️ EMERGENCY_ATTACK: Counter attacking %s during cooldown!", 
+                               target.get("name", "?"))
+                    return {"action": "attack",
+                            "data": {"targetId": target["id"], "targetType": "agent"},
+                            "reason": f"EMERGENCY ATTACK: Counter {target.get('name','?')} under attack"}
+        
         log.info("COOLDOWN_WAIT: Waiting for cooldown to expire (canAct=False)")
         return None  # Wait for cooldown
 
@@ -560,15 +707,50 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                       and a.get("regionId") == region_id]
     # enemies_here sudah didefinisikan di atas dengan benar (termasuk yang tanpa regionId)
 
-    # EMERGENCY: Flee if OUTNUMBERED (mode-dependent)
+    # EMERGENCY: Flee if OUTNUMBERED (mode-dependent) - SMART OUTNUMBERED LOGIC
     enemy_count = len(enemies_here)
     if enemy_count >= outnumbered_threshold and ep >= move_ep_cost:
-        safe = _find_safe_region_with_exit(connections, danger_ids, view)
-        if safe:
-            log.warning("🚨 OUTNUMBERED! %d enemies vs 1, mode=%s, threshold=%d — FLEEING!", 
-                       enemy_count, aggression, outnumbered_threshold)
-            return {"action": "move", "data": {"regionId": safe},
-                    "reason": f"OUTNUMBERED FLEE: {enemy_count} enemies vs 1 (mode={aggression})"}
+        # SMART OUTNUMBERED: Check if we should fight based on enemy strength
+        should_flee_outnumbered = True
+        fight_reason = []
+        
+        if enemies_here and equipped:
+            # Analyze all enemies to see if we have advantage
+            my_weapon_type = equipped.get("typeId", "").lower()
+            my_weapon_bonus = WEAPONS.get(my_weapon_type, {}).get("bonus", 0)
+            
+            # Check each enemy's strength
+            weak_enemies = 0
+            for enemy in enemies_here:
+                enemy_hp = enemy.get("hp", 100)
+                enemy_weapon = enemy.get("equippedWeapon", {})
+                enemy_weapon_type = enemy_weapon.get("typeId", "fist").lower()
+                enemy_weapon_bonus = WEAPONS.get(enemy_weapon_type, {}).get("bonus", 0)
+                
+                # Compare our strength vs enemy
+                hp_advantage = hp > enemy_hp * 1.2  # We have 20%+ HP advantage
+                weapon_advantage = my_weapon_bonus > enemy_weapon_bonus * 1.3  # Our weapon is 30%+ better
+                
+                if hp_advantage and weapon_advantage:
+                    weak_enemies += 1
+                    fight_reason.append(f"{enemy.get('name','?')} (HP={enemy_hp}, W={enemy_weapon_type})")
+            
+            # Decision: Fight if most enemies are weak and we're armed
+            if weak_enemies >= enemy_count * 0.6:  # 60%+ enemies are weak
+                should_flee_outnumbered = False
+                log.info("⚔️ OUTNUMBERED_FIGHT: %d enemies but %d are weak (%s) - FIGHTING!", 
+                         enemy_count, weak_enemies, ", ".join(fight_reason[:3]))
+                return {"action": "attack", "data": {"targetId": enemies_here[0]["id"], "targetType": "agent"},
+                        "reason": f"OUTNUMBERED FIGHT: {weak_enemies}/{enemy_count} enemies weak, engaging!"}
+        
+        # Flee if we should flee
+        if should_flee_outnumbered:
+            safe = _find_safe_region_with_exit(connections, danger_ids, view)
+            if safe:
+                log.warning("🚨 OUTNUMBERED! %d enemies vs 1, mode=%s, threshold=%d — FLEEING!", 
+                           enemy_count, aggression, outnumbered_threshold)
+                return {"action": "move", "data": {"regionId": safe},
+                        "reason": f"OUTNUMBERED FLEE: {enemy_count} enemies vs 1 (mode={aggression})"}
     
     # AGGRESSIVE CHASE: In combat mode, pursue enemies even if slightly risky
     if aggression == "aggressive" and enemies_here and has_weapon and hp >= 40:
@@ -606,70 +788,25 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     return {"action": "move", "data": {"regionId": safe},
                         "reason": f"OUTMATCHED FLEE: Enemy dmg={e_dmg} vs {my_dmg}, HP={hp}"}
 
-    # ── Priority 4b: DEFENSIVE ATTACK (Musuh di region sama = bahaya!) ─────────────────
-    # TIME EFFICIENT: Attack more frequently for maximum kills in 59 turns
-    # Lower EP threshold for more combat opportunities
-    MIN_EP_FOR_COMBAT = max(1, COMBAT_MIN_EP - 1)  # Allow combat with minimal EP
-    if enemies_here and has_weapon and hp >= 20 and ep >= MIN_EP_FOR_COMBAT:
-        target = _select_weakest(enemies_here)
-        if target:
-            # IMPROVED: Use comprehensive enemy strength estimation
-            enemy_strength = _estimate_enemy_strength(target)
-            enemy_hp = enemy_strength["hp"]
-            enemy_name = target.get("name", "?")
-            
-            # Calculate damage using comprehensive stats
-            my_dmg = calc_damage(atk, get_weapon_bonus(equipped), enemy_strength["def"], region_weather)
-            enemy_dmg = calc_damage(enemy_strength["atk"], enemy_strength["weapon_bonus"], defense, region_weather)
-            
-            # IMPROVED: Consider effective HP (HP + heal potential) instead of raw HP
-            enemy_effective_hp = enemy_strength["effective_hp"]
-            threat_level = enemy_strength["threat_level"]
-            
-            # SNIPER AGGRESSION: If we have sniper, ALWAYS attack regardless of stats
-            if w_type == "sniper":
-                should_attack = True
-                log.info("🎯 SNIPER_AGGRESSIVE: ALWAYS attack %s - Sniper range dominance!", enemy_name)
-            else:
-                # Non-sniper normal aggression rules
-                can_one_shot = enemy_effective_hp <= my_dmg  # Can kill even with heals
-                we_stronger = my_dmg > enemy_dmg * 1.2 and hp >= enemy_effective_hp * 0.8
-                is_finisher = enemy_hp < finisher_threshold  # Use raw HP for finisher check
-                
-                # NEW: Aggressive advantage exploitation - weapon vs fists is always worth attacking
-                has_weapon_advantage = has_weapon and enemy_strength["weapon_type"] == "fist"
-                huge_damage_advantage = my_dmg >= enemy_dmg * 2  # Double damage is huge advantage
-                
-                # IMPROVED: Consider EP advantage - if enemy has high EP, they can act more
-                ep_advantage = ep >= enemy_strength["ep"]
-                
-                log.info("🎯 ENEMY_ANALYSIS: %s | Threat=%d | EffectiveHP=%d | DMG=%d | EP=%d | Heals=%d | Wpn=%s",
-                         enemy_name, threat_level, enemy_effective_hp, enemy_dmg, 
-                         enemy_strength["ep"], enemy_strength["estimated_heals"], enemy_strength["weapon_type"])
-                
-                should_attack = (can_one_shot or we_stronger or is_finisher or 
-                               (has_weapon_advantage and huge_damage_advantage))
-            
-            if should_attack and ep_advantage:
-                attack_reason = "AGGRESSIVE" if has_weapon_advantage else "DEFENSIVE"
-                log.info("⚔️ %s_ATTACK: %s in same region (Threat=%d, WeaponAdv=%s) — attacking!", 
-                         attack_reason, enemy_name, threat_level, has_weapon_advantage)
-                return {"action": "attack",
-                        "data": {"targetId": target["id"], "targetType": "agent"},
-                        "reason": f"{attack_reason}: Attacking {enemy_name} (threat={threat_level}, effHP={enemy_effective_hp})"}
-            else:
-                # AGGRESSIVE SNIPER: Sniper never flees - range advantage eliminates all threats
-                reason_detail = []
-                should_flee = False
-                
-                # SNIPER DOMINANCE: If we have sniper, NEVER flee regardless of enemy stats
-                if w_type == "sniper":
-                    reason_detail.append("sniper_dominance")
-                    should_flee = False
-                    log.info("🎯 SNIPER_NO_FLEE: Sniper range advantage - NEVER flee from %s (HP=%s EP=%s W=%s)", 
-                             enemy_name, enemy_strength.get("hp", "?"), enemy_strength.get("ep", "?"), 
-                             enemy_strength.get("weapon_type", "fist"))
-                else:
+    # ── Priority 4b: PHASE-BASED COMBAT LOGIC ─────────────────────────────────
+    # EARLY GAME: Avoid combat, focus on weapon search and loot
+    if phase_strategy == "WEAPON_SEARCH":
+        if enemies_here and not equipped:
+            # No weapon, avoid combat at all costs
+            log.info("🔍 EARLY_GAME: No weapon - avoiding combat, searching for gear")
+            safe = _find_safe_region_with_exit(connections, danger_ids, view)
+            if safe and ep >= move_ep_cost:
+                return {"action": "move", "data": {"regionId": safe},
+                        "reason": "EARLY_GAME: Avoid combat without weapon"}
+        elif enemies_here and equipped:
+            # Has weapon but still early - be very selective
+            weapon_strategy = _get_weapon_strategy(equipped)
+            if weapon_strategy["style"] in ["melee_defensive", "ranged_defensive"]:
+                log.info("🔍 EARLY_GAME: Defensive weapon - avoiding combat")
+                safe = _find_safe_region_with_exit(connections, danger_ids, view)
+                if safe and ep >= move_ep_cost:
+                    return {"action": "move", "data": {"regionId": safe},
+                            "reason": "EARLY_GAME: Defensive weapon avoiding combat"}
                     # Non-sniper normal flee logic
                     if not can_one_shot and not we_stronger and not is_finisher:
                         reason_detail.append("stronger")
@@ -705,7 +842,19 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             log.info("⚔️ COMBAT_PREP: Auto-equipping weapon - always be combat ready!")
             return equip_action
 
-    # ── Priority 5b: Free actions (pickup, heal) ─────────────────
+    # ── Priority 5b: DEFENSE PREPARATION (Weapon priority when under threat!) ─────────
+    # CRITICAL: Prioritize weapon pickup when unarmed and enemies nearby
+    if not equipped and (enemies_here or enemies_in_range or under_attack):
+        # Look for weapons on ground when under threat
+        weapon_items = [item for item in visible_items if "weapon" in item.get("typeId", "").lower()]
+        if weapon_items:
+            best_weapon = max(weapon_items, key=lambda x: WEAPONS.get(x.get("typeId", "").lower(), {}).get("bonus", 0))
+            log.warning("🛡️ DEFENSE_PICKUP: Under attack, picking up weapon %s for defense!", 
+                        best_weapon.get("typeId", "weapon"))
+            return {"action": "pickup", "data": {"itemId": best_weapon["id"]},
+                    "reason": f"DEFENSE PICKUP: {best_weapon.get('typeId','weapon')} for combat"}
+
+    # ── Priority 5c: Free actions (pickup, heal) ─────────────────
     # COMBAT PRIORITY: Only do free actions if NO enemies nearby!
     # If enemies in range, combat takes priority over inventory management
     if not enemies_here and not enemies_in_range:  # Safe to loot/interact
@@ -1397,40 +1546,13 @@ def _estimate_enemy_strength(agent: dict) -> dict:
     Comprehensive enemy strength estimation.
     
     Returns dict with:
-    - weapon_bonus: ATK bonus from weapon
-    - weapon_range: Range of weapon (0=melee, 1+=ranged)
-    - weapon_type: Weapon typeId
-    - ep: Enemy EP (action points available)
-    - estimated_heals: Estimated healing items (based on inventory hints)
-    - effective_hp: HP + estimated heal potential
-    - threat_level: 0-100 (higher = more dangerous)
-    """
-    # Basic stats
-    hp = agent.get("hp", 100)
-    ep = agent.get("ep", 10)
-    atk = agent.get("atk", 10)
-    defense = agent.get("def", 5)
     
-    # Weapon analysis
-    weapon = agent.get("equippedWeapon")
-    weapon_type = "fist"
-    weapon_bonus = 0
-    weapon_range = 0
+    # Calculate estimated damage
+    my_def = 5  # Assume average defense
+    estimated_damage = calc_damage(enemy_atk, weapon_bonus, my_def)
     
-    if weapon:
-        if isinstance(weapon, dict):
-            weapon_type = weapon.get("typeId", "").lower()
-        elif isinstance(weapon, str):
-            weapon_type = weapon.lower()
-        weapon_bonus = WEAPONS.get(weapon_type, {}).get("bonus", 0)
-        weapon_range = WEAPONS.get(weapon_type, {}).get("range", 0)
-    
-    # Estimate healing items from inventory (if visible) or default assumptions
-    inventory = agent.get("inventory", [])
-    estimated_heals = 0
-    heal_potential = 0
-    
-    if inventory and isinstance(inventory, list):
+    # Estimate healing items (conservative: assume 0-2)
+    estimated_heals = min(2, max(0, (100 - enemy_hp) // 30))
         for item in inventory:
             if isinstance(item, dict):
                 item_type = item.get("typeId", "").lower()

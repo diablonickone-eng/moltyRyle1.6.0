@@ -452,6 +452,9 @@ class WebSocketEngine:
                     if is_target_me and dmg_val > 0:
                         self._game_stats["damage_taken"] += dmg_val
                         log.info("💔 DAMAGE TAKEN: %d | Total: %d", dmg_val, self._game_stats["damage_taken"])
+                        # Track recent damage for emergency combat response
+                        from bot.strategy.brain import decide_action
+                        decide_action._recent_damage_taken = dmg_val
                     if is_me and is_kill:
                         self._game_stats["kills"] += 1
                         log.info("🎯 KILL TRACKED! Total kills this game: %d", self._game_stats["kills"])
