@@ -56,7 +56,7 @@ ITEM_PRIORITY = {
     "medkit": 70, "bandage": 65, "emergency_food": 60, "energy_drink": 58,
     "binoculars": 55,  # Passive: vision +1 permanent, always pickup
     "map": 52,         # Reveal entire map (consumable/one-time)
-    "megaphone": 50,   # Global broadcast (consumable)
+    "megaphone": 0,    # Global broadcast (consumable) - DO NOT PICKUP
     "moltz": 10,       # Ground currency (pickup if nothing else)
 }
 
