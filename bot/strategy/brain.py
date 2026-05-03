@@ -617,6 +617,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             
             # AGGRESSIVE: Attack with any advantage + weapon vs fists
             should_attack = (can_one_shot or we_stronger or is_finisher or 
+                           has_weapon_advantage or  # ANY weapon vs fists is worth attacking
                            (has_weapon_advantage and huge_damage_advantage))
             
             if should_attack and ep_advantage:
@@ -1465,11 +1466,25 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
                      and i.get("typeId", "").lower() in RECOVERY_ITEMS
                      and RECOVERY_ITEMS.get(i.get("typeId", "").lower(), 0) > 0)
 
-    # If inventory full (max 10 slots per limits.md), skip pickup.
-    # NOTE: 'drop' is NOT a valid game action — prevent clutter by not picking up inferior items.
+    # SMART INVENTORY: If full, check if we should use inferior items first
     if len(inventory) >= 10:
-        log.info("PICKUP: Inventory full (%d/10) — skipping pickup", len(inventory))
-        return None
+        # Try to use low-value items to make space for better ones
+        usage_action = _try_use_low_value_items(inventory, heal_count)
+        if usage_action:
+            return usage_action
+        
+        # If no usage possible, check if new item is significantly better
+        best_replacement = _find_best_replacement(local_items, inventory, heal_count)
+        if best_replacement:
+            item_to_drop, item_to_pickup = best_replacement
+            log.info("SMART_INVENTORY: Found better item %s > %s, but no drop action available", 
+                    item_to_pickup.get("typeId", "item"), item_to_drop.get("typeId", "item"))
+            # Since game doesn't have drop action, we'll skip pickup and wait for natural turnover
+            log.info("PICKUP: Inventory full (%d/10) — waiting for natural turnover", len(inventory))
+            return None
+        else:
+            log.info("PICKUP: Inventory full (%d/10) — no valuable replacements", len(inventory))
+            return None
 
     # Sort by priority — Moltz always first
     local_items.sort(
@@ -1482,6 +1497,121 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
         return {"action": "pickup", "data": {"itemId": best["id"]},
                 "reason": f"PICKUP: {type_id}"}
     return None
+
+
+def _try_use_low_value_items(inventory: list, heal_count: int) -> dict | None:
+    """Try to use low-value items to make space for better pickups."""
+    if not inventory:
+        return None
+    
+    # Find lowest value consumable items
+    low_value_items = []
+    for item in inventory:
+        if not isinstance(item, dict):
+            continue
+        
+        type_id = item.get("typeId", "").lower()
+        item_id = item.get("id")
+        
+        # Check for recently failed usage
+        action_key = f"use_item:{item_id}"
+        if _failed_actions.get(action_key, 0) > _current_turn:
+            continue
+        
+        # Priority items to use when inventory is full
+        if type_id == "energy_drink":
+            low_value_items.append((item, 10))  # Low priority
+        elif type_id in ("emergency_food", "bandage") and heal_count > 3:
+            low_value_items.append((item, 20))  # Use excess healing
+        elif type_id == "medkit" and heal_count > 2:
+            low_value_items.append((item, 25))  # Use excess medkits
+        elif type_id == "map":
+            low_value_items.append((item, 30))  # Use map to reveal
+    
+    if low_value_items:
+        # Use lowest priority item first
+        low_value_items.sort(key=lambda x: x[1])
+        best_item, _ = low_value_items[0]
+        type_id = best_item.get("typeId", "").lower()
+        
+        log.info("SMART_INVENTORY: Using low-value item %s to make space", type_id)
+        return {"action": "use_item", "data": {"itemId": best_item["id"]},
+                "reason": f"SMART_USE: Making space for better items"}
+    
+    return None
+
+
+def _find_best_replacement(local_items: list, inventory: list, heal_count: int) -> tuple | None:
+    """Find best item to replace when inventory is full.
+    Returns (item_to_drop, item_to_pickup) or None if no valuable replacement.
+    """
+    if not local_items or not inventory:
+        return None
+    
+    # Score all ground items
+    ground_scores = []
+    for item in local_items:
+        if isinstance(item, dict):
+            score = _pickup_score(item, inventory, heal_count)
+            if score > 0:
+                ground_scores.append((item, score))
+    
+    if not ground_scores:
+        return None
+    
+    # Find best ground item
+    best_ground = max(ground_scores, key=lambda x: x[1])
+    best_item, best_score = best_ground
+    
+    # Find worst inventory item
+    inventory_scores = []
+    for item in inventory:
+        if isinstance(item, dict):
+            # Calculate current value of inventory item
+            inv_score = _calculate_item_value(item, inventory, heal_count)
+            inventory_scores.append((item, inv_score))
+    
+    if not inventory_scores:
+        return None
+    
+    worst_inventory = min(inventory_scores, key=lambda x: x[1])
+    worst_item, worst_score = worst_inventory
+    
+    # Only replace if ground item is significantly better (25% improvement)
+    if best_score > worst_score * 1.25:
+        return (worst_item, best_item)
+    
+    return None
+
+
+def _calculate_item_value(item: dict, inventory: list, heal_count: int) -> int:
+    """Calculate current value of an inventory item."""
+    type_id = item.get("typeId", "").lower()
+    category = item.get("category", "").lower()
+    
+    # Use same scoring as pickup but for existing items
+    if type_id == "rewards" or category == "currency":
+        return 300
+    
+    if category == "weapon":
+        weapon_bonus = WEAPONS.get(type_id, {}).get("bonus", 0)
+        return 100 + weapon_bonus
+    
+    if type_id in RECOVERY_ITEMS and RECOVERY_ITEMS.get(type_id, 0) > 0:
+        if heal_count <= 2:
+            return RECOVERY_ITEMS.get(type_id, 0) * 3  # High value when low on heals
+        elif heal_count <= 4:
+            return RECOVERY_ITEMS.get(type_id, 0) * 2  # Moderate value
+        else:
+            return RECOVERY_ITEMS.get(type_id, 0) // 2  # Low value when stocked
+    
+    if type_id == "binoculars":
+        return 55
+    
+    if type_id == "map":
+        return 10  # Low value if not used yet
+    
+    return 5  # Default low value for unknown items
 
 
 def _pickup_score(item: dict, inventory: list, heal_count: int) -> int:
