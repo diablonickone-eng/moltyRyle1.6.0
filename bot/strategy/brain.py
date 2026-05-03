@@ -628,19 +628,35 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         "data": {"targetId": target["id"], "targetType": "agent"},
                         "reason": f"{attack_reason}: Attacking {enemy_name} (threat={threat_level}, effHP={enemy_effective_hp})"}
             else:
-                # Enemy stronger or has EP advantage - FLEE immediately
+                # ENHANCED FLEE LOGIC: Consider EP disadvantage and weapon advantage
                 reason_detail = []
+                should_flee = True
+                
                 if not can_one_shot and not we_stronger and not is_finisher:
                     reason_detail.append("stronger")
-                if not ep_advantage:
-                    reason_detail.append("EP disadvantage")
+                    should_flee = True
                 
-                log.warning("🚨 STRONGER ENEMY! %s (Threat=%d, EffHP=%d, DMG=%d, EP=%d) > us — FLEE!",
-                           enemy_name, threat_level, enemy_effective_hp, enemy_dmg, enemy_strength["ep"])
-                safe = _find_safe_region_with_exit(connections, danger_ids, view)
-                if safe and ep >= move_ep_cost:
-                    return {"action": "move", "data": {"regionId": safe},
-                            "reason": f"FLEE: {enemy_name} threat={threat_level} ({', '.join(reason_detail)})"}
+                # EP DISADVANTAGE: Enemy with low EP is less dangerous
+                if enemy_strength["ep"] <= 2:  # Enemy EP <= 2 = not much threat
+                    reason_detail.append("enemy_low_EP")
+                    should_flee = False  # Don't flee from low EP enemies
+                
+                # WEAPON ADVANTAGE: Don't flee if we have range advantage
+                if w_range >= 1 and enemy_strength["weapon_range"] == 0:  # We have ranged, enemy melee
+                    reason_detail.append("our_range_advantage")
+                    should_flee = False  # Don't flee from melee enemies with ranged weapon
+                
+                if should_flee:
+                    log.warning("🚨 STRONGER ENEMY! %s (Threat=%d, EffHP=%d, DMG=%d, EP=%d) > us — FLEE!",
+                               enemy_name, threat_level, enemy_effective_hp, enemy_dmg, enemy_strength["ep"])
+                    safe = _find_safe_region_with_exit(connections, danger_ids, view)
+                    if safe and ep >= move_ep_cost:
+                        return {"action": "move", "data": {"regionId": safe},
+                                "reason": f"FLEE: {enemy_name} threat={threat_level} ({', '.join(reason_detail)})"}
+                else:
+                    log.info("🛡️ NO_FLEE: Enemy strong but我们有 advantages (EP=%d, Range=%d) - STANDING GROUND!", 
+                             enemy_strength["ep"], w_range)
+                    # Don't flee - stand ground and fight
 
     # ── Priority 5: Free actions (pickup, equip) ─────────────────
     # COMBAT PRIORITY: Only do free actions if NO enemies nearby!
@@ -1319,8 +1335,12 @@ def _estimate_enemy_strength(agent: dict) -> dict:
     elif weapon_type in ("dagger", "bow"):
         threat_level += 8
     
-    # EP threat (high EP = can act more)
-    threat_level += min(20, ep * 2)  # 10 EP = 20 pts
+    # EP threat (reduced weight - EP=1 should not be major threat)
+    threat_level += min(10, ep * 1)  # 10 EP = 10 pts (reduced from 20)
+    
+    # EP disadvantage penalty (low EP = less dangerous)
+    if ep <= 2:
+        threat_level -= 15  # Significant penalty for very low EP
     
     # Heal potential threat (sustainability)
     threat_level += min(15, estimated_heals * 5)  # 3 heals = 15 pts
