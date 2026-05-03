@@ -769,9 +769,24 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                               f"(HP={target['agent'].get('hp','?')} Weapon={w_type or 'fist'})"}
 
     # FAST PATH B: Ranged weapon — attack adjacent-region enemies without moving!
+    # FORCE COMBAT: If enemies in range, ALWAYS attack before movement
     if enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and can_afford_combat:
+        log.info("🎯 FORCE_COMBAT: %d enemies in range with sniper - ATTACKING!", len(enemies_in_range))
         log.debug("FAST_PATH_B: Checking %d enemies in range | ep=%d | can_afford=%s", 
                   len(enemies_in_range), ep, can_afford_combat)
+        
+        # PRIORITY: Attack weakest enemy first for quick kills
+        weakest = _select_weakest(enemies_in_range)
+        if weakest:
+            log.info("🏹 RANGED_ATTACK: Targeting weakest %s in adjacent region (HP=%s)",
+                     weakest.get("name", "?"), weakest.get("hp", "?"))
+            _track_attack(attack_type="ranged")
+            return {"action": "attack",
+                    "data": {"targetId": weakest["id"], "targetType": "agent"},
+                    "reason": f"RANGED: Shooting weakest {weakest.get('name','?')} "
+                              f"(HP={weakest.get('hp','?')} W={w_type})"}
+        
+        # Fallback: Use best target selection
         target = _select_best_target(
             enemies_in_range, atk, equipped, defense, region_weather,
             my_hp=hp, alive_count=alive_count
@@ -785,15 +800,13 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     "reason": f"RANGED: Shooting {target['agent'].get('name','?')} "
                               f"(HP={target['agent'].get('hp','?')} W={w_type})"}
         else:
-            # RANGED PRIORITY: Attack weakest enemy anyway due to range advantage
-            # Enemy in adjacent cannot melee counter-attack, so we have advantage
-            log.info("🏹 RANGED_PRIORITY: No 'acceptable' target, but attacking weakest due to range advantage")
-            weakest = _select_weakest(enemies_in_range)
-            if weakest:
-                _track_attack(attack_type="ranged")
-                return {"action": "attack",
-                        "data": {"targetId": weakest["id"], "targetType": "agent"},
-                        "reason": f"RANGED_PRIORITY: Attacking weakest {weakest.get('name','?')} (HP={weakest.get('hp','?')}) with {w_type} range advantage"}
+            # RANGED PRIORITY: Attack any enemy due to range advantage
+            log.info("🏹 RANGED_PRIORITY: No 'acceptable' target, but attacking any due to range advantage")
+            any_enemy = enemies_in_range[0]  # Just attack first one
+            _track_attack(attack_type="ranged")
+            return {"action": "attack",
+                    "data": {"targetId": any_enemy["id"], "targetType": "agent"},
+                    "reason": f"RANGED_PRIORITY: Attacking {any_enemy.get('name','?')} (HP={any_enemy.get('hp','?')}) with {w_type} range advantage"}
 
     # PATH C: General scan — target any visible enemy if in range
     if enemies and ep >= ep_budget and can_afford_combat and weather_ok:
@@ -1114,13 +1127,29 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     "reason": f"ACTIVE_HUNTING: Seeking kills ({hunt_phase}, {alive_count} alive)"}
 
     # ── Priority 9b: Strategic movement ────────────────────────────
-    # Only move if there's something worth moving toward (items, facilities, enemies)
-    # In empty free rooms, avoid aimless wandering that wastes EP
-    has_targets = (len(visible_items) > 0 or
-                   any(f for f in interactables if isinstance(f, dict) and not f.get("isUsed")) or
-                   len(visible_agents) > 0)
+    # COMBAT PRIORITY: Only move if no immediate combat opportunities
+    if enemies_in_range and w_range >= 1 and ep >= MIN_EP_FOR_COMBAT and can_afford_combat:
+        log.warning("🚨 COMBAT_PRIORITY: %d enemies in range but movement selected - FORCING COMBAT!", len(enemies_in_range))
+        # Force attack instead of movement
+        weakest = _select_weakest(enemies_in_range)
+        if weakest:
+            _track_attack(attack_type="ranged")
+            return {"action": "attack",
+                    "data": {"targetId": weakest["id"], "targetType": "agent"},
+                    "reason": f"FORCE_COMBAT: Attacking {weakest.get('name','?')} (range advantage) instead of movement"}
+    
+    # Only move if no immediate combat opportunities
+    if (not enemies_here and not enemies_in_range) or ep < MIN_EP_FOR_COMBAT:
+        # In empty free rooms, avoid aimless wandering that wastes EP
+        has_targets = (len(visible_items) > 0 or
+                       any(f for f in interactables if isinstance(f, dict) and not f.get("isUsed")) or
+                       len(visible_agents) > 0)
 
-    # WEATHER DELAY: avoid unnecessary movement in storm
+        # WEATHER DELAY: avoid unnecessary movement in storm
+        weather_delay = (region_weather == "storm" and not has_targets and ep < 6)
+        if weather_delay:
+            log.info("WEATHER_DELAY: Storm + no targets + low EP. Waiting for clear weather.")
+            return None  # Skip movement, rest instead
     weather_delay = (region_weather == "storm" and not has_targets and ep < 6)
     if weather_delay:
         log.info("WEATHER_DELAY: Storm + no targets + low EP. Waiting for clear weather.")

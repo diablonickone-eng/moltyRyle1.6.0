@@ -19,10 +19,10 @@ DEFAULT_DNA = {
     "finisher_threshold_late": 60,   # HP musuh untuk finisher (late)
     "ready_for_war_hp": 60,          # HP threshold untuk "war mode"
     
-    # Aggression curve per game phase
-    "aggression_early": 0.3,         # 0-1 (30% aggressive)
-    "aggression_mid": 0.6,           # 0-1 (60% aggressive)
-    "aggression_late": 0.9,          # 0-1 (90% aggressive)
+    # Aggression curve per game phase - MAXIMUM AGGRESSION for kills
+    "aggression_early": 0.9,         # 0-1 (90% aggressive) - MAX for early kills
+    "aggression_mid": 0.9,           # 0-1 (90% aggressive) - SUSTAINED hunting
+    "aggression_late": 1.0,          # 0-1 (100% aggressive) - DESPERATION mode
     
     # Item priorities (genes)
     "weapon_priority_boost": 100,    # Base score for weapons
