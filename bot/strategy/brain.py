@@ -687,6 +687,36 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         log.info("🚨 COMBAT_PRIORITY: Enemies nearby (%d here, %d in range) - skipping inventory management", 
                  len(enemies_here), len(enemies_in_range))
 
+    # ── Priority 2: IMMEDIATE COMBAT (Before cooldown check!) ─────────
+    # COMBAT URGENT: Attack enemies in range even during cooldown if possible
+    # This prevents missing kill opportunities due to cooldown timing
+    if enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and weather_ok:
+        log.info("🎯 URGENT_COMBAT: %d enemies in range - attempting attack!", len(enemies_in_range))
+        
+        # Try to attack even during cooldown - game will reject if not allowed
+        weakest = _select_weakest(enemies_in_range)
+        if weakest:
+            log.info("🏹 URGENT_RANGED_ATTACK: Targeting weakest %s (HP=%s)",
+                     weakest.get("name", "?"), weakest.get("hp", "?"))
+            _track_attack(attack_type="ranged")
+            return {"action": "attack",
+                    "data": {"targetId": weakest["id"], "targetType": "agent"},
+                    "reason": f"URGENT_COMBAT: Attacking {weakest.get('name','?')} "
+                              f"(HP={weakest.get('hp','?')} W={w_type})"}
+    
+    # Same region enemies - highest priority
+    if enemies_here and ep >= COMBAT_MIN_EP and weather_ok:
+        log.info("🎯 URGENT_SAME_REGION: %d enemies in same region - attacking!", len(enemies_here))
+        weakest = _select_weakest(enemies_here)
+        if weakest:
+            log.info("⚔️ URGENT_MELEE_ATTACK: Targeting weakest %s (HP=%s)",
+                     weakest.get("name", "?"), weakest.get("hp", "?"))
+            _track_attack(attack_type="melee")
+            return {"action": "attack",
+                    "data": {"targetId": weakest["id"], "targetType": "agent"},
+                    "reason": f"URGENT_COMBAT: Attacking {weakest.get('name','?')} "
+                              f"(HP={weakest.get('hp','?')} in same region"}
+
     # If cooldown active, only free actions allowed
     if not can_act:
         return None
