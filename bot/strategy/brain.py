@@ -392,17 +392,26 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
              len(enemies), len(enemies_here), len(enemies_in_range), len(finisher_targets),
              is_ready_for_war, w_type or "fist")
 
-    # Survival gate: do not let old/overfit DNA make the bot fight at reckless HP.
-    # Mode-based minimum HP for combat - LOWERED for aggressive engagement
+    # Survival gate: TIME EFFICIENT - prioritize kills over survival
+    # Mode-based minimum HP for combat - ULTRA AGGRESSIVE for maximum kills
     aggression = AGGRESSION_LEVEL.lower() if AGGRESSION_LEVEL else "balanced"
-    if aggression == "aggressive":
-        mode_hp_min = 20  # Combat mode: engage much earlier
-    elif aggression == "passive":
-        mode_hp_min = 50  # Survive mode: more conservative
-    else:
-        mode_hp_min = 35  # Balanced: moderate engagement
     
-    phase_floor = 20 if alive_count <= 10 else (30 if alive_count <= 25 else 35)
+    # TIME EFFICIENT THRESHOLDS: Lower HP for more combat opportunities
+    if aggression == "aggressive":
+        mode_hp_min = 15  # Ultra aggressive: engage at 15 HP
+    elif aggression == "passive":
+        mode_hp_min = 35  # Still more aggressive than before
+    else:
+        mode_hp_min = 25  # Balanced: engage at 25 HP
+    
+    # Phase-based floors: even more aggressive for time efficiency
+    if alive_count <= 10:  # Endgame - desperation mode
+        phase_floor = 10
+    elif alive_count <= 25:  # Late game - aggressive
+        phase_floor = 15
+    else:  # Early game - maximum aggression
+        phase_floor = 20
+    
     combat_hp_floor = max(strategy["combat_hp_threshold"], phase_floor, mode_hp_min)
     can_afford_combat = hp >= combat_hp_floor or (
         hp >= _get_combat_hp_threshold(alive_count, equipped) and is_ready_for_war
@@ -571,9 +580,10 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         "reason": f"OUTMATCHED FLEE: Enemy dmg={e_dmg} vs {my_dmg}, HP={hp}"}
 
     # ── Priority 4b: DEFENSIVE ATTACK (Musuh di region sama = bahaya!) ─────────────────
-    # HANYA serang jika musuh LEBIH LEMAH atau bisa FINISHER - gunakan comprehensive strength estimation
-    # Estimasi sekarang mencakup: weapon type, EP, dan heal item potential
-    if enemies_here and has_weapon and hp >= 40 and ep >= COMBAT_MIN_EP:
+    # TIME EFFICIENT: Attack more frequently for maximum kills in 59 turns
+    # Lower EP threshold for more combat opportunities
+    MIN_EP_FOR_COMBAT = max(1, COMBAT_MIN_EP - 1)  # Allow combat with minimal EP
+    if enemies_here and has_weapon and hp >= 20 and ep >= MIN_EP_FOR_COMBAT:
         target = _select_weakest(enemies_here)
         if target:
             # IMPROVED: Use comprehensive enemy strength estimation
@@ -1057,6 +1067,8 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     is_ready_to_hunt = hp >= 30 and ep >= 4  # Lower threshold for aggressive hunting
     
     # Hunt at ALL game phases if ready and no enemies nearby
+    # TIME EFFICIENT: Maximum kills in 59 turns = 1 kill per turn target
+    is_ready_to_hunt = hp >= 25 and ep >= 3  # Even lower threshold for time efficiency
     if is_ready_to_hunt and not enemies_here and not enemies_in_range:
         # Cari region dengan musuh untuk dihunt
         best_hunt_target = None
@@ -1067,16 +1079,27 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 continue
             enemy_count = enemy_region_count.get(rid, 0)
             if enemy_count > 0:
-                # Score: lebih suka 1-2 musuh (bisa dihandle), hindari 3+ (bahaya)
-                score = 50 if enemy_count <= 2 else 10
-                if is_endgame:
-                    score += 30  # Lebih aggressive di endgame
-                elif is_late_game:
-                    score += 20  # Moderate bonus late game
-                else:
-                    score += 40  # HIGH bonus for early game hunting!
-                if rid not in _visited_regions:
-                    score += 20  # Prefer unexplored
+                # TIME EFFICIENT SCORING: Prioritize quick kills
+                # Early game (Turns 1-20): Maximum aggression for early kills
+                # Mid game (Turns 21-40): Sustained hunting pressure  
+                # Endgame (Turns 41-59): Desperation mode - any target
+                
+                if alive_count >= 50:  # Early game - maximum aggression
+                    score = 80 if enemy_count <= 2 else 40  # Very high early game bonus
+                    score += 30  # Time efficiency bonus
+                elif alive_count >= 25:  # Mid game - balanced hunting
+                    score = 60 if enemy_count <= 2 else 20
+                    score += 20  # Moderate time bonus
+                else:  # Endgame - desperation
+                    score = 70 if enemy_count <= 3 else 50  # Willing to fight larger groups
+                    score += 40  # Maximum desperation bonus
+                
+                # Distance penalty - prefer closer targets for time efficiency
+                distance_penalty = 0
+                if rid in _visited_regions:
+                    distance_penalty = 10  # Prefer new regions for exploration
+                
+                score -= distance_penalty
                 if score > best_hunt_score:
                     best_hunt_score = score
                     best_hunt_target = rid
