@@ -643,8 +643,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                             "reason": f"FLEE: {enemy_name} threat={threat_level} ({', '.join(reason_detail)})"}
 
     # ── Priority 5: Free actions (pickup, equip) ─────────────────
-    # ONLY do free actions if NO enemies in same region!
-    if not enemies_here:  # Safe to loot/interact
+    # COMBAT PRIORITY: Only do free actions if NO enemies nearby!
+    # If enemies in range, combat takes priority over inventory management
+    if not enemies_here and not enemies_in_range:  # Safe to loot/interact
         # Moderate healing in safe area
         heal_action = _moderate_heal_in_safe_area(hp, inventory, healing_count, enemies_here, region_id)
         if heal_action:
@@ -655,7 +656,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         if pickup_action:
             return pickup_action
 
-    # Auto-equip better weapon
+    # Auto-equip better weapon (higher priority than pickup)
     equip_action = _check_equip(inventory, equipped)
     if equip_action:
         return equip_action
@@ -664,6 +665,11 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     util_action = _use_utility_item(inventory, hp, ep, alive_count)
     if util_action:
         return util_action
+    
+    # COMBAT WARNING: Skip inventory management when enemies nearby
+    if enemies_here or enemies_in_range:
+        log.info("🚨 COMBAT_PRIORITY: Enemies nearby (%d here, %d in range) - skipping inventory management", 
+                 len(enemies_here), len(enemies_in_range))
 
     # If cooldown active, only free actions allowed
     if not can_act:
