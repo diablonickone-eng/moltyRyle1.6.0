@@ -199,6 +199,26 @@ def _get_weapon_strategy(equipped_weapon) -> dict:
     weapon_type = equipped_weapon.get("typeId", "").lower()
     return WEAPON_STRATEGIES.get(weapon_type, WEAPON_STRATEGIES["fist"])
 
+
+def _get_weapon_icon(weapon_type: str) -> str:
+    """Get icon for specific weapon type."""
+    weapon_icons = {
+        "katana": "⚔️",
+        "sniper": "🔫", 
+        "sword": "🗡️",
+        "pistol": "🔫",
+        "dagger": "🗡️",
+        "bow": "🏹",
+        "fist": "👊"
+    }
+    return weapon_icons.get(weapon_type.lower(), "⚔️")
+
+
+def _format_weapon_with_icon(weapon_type: str) -> str:
+    """Format weapon name with its icon."""
+    icon = _get_weapon_icon(weapon_type)
+    return f"{icon}{weapon_type.upper()}"
+
 _known_agents: dict = {}
 # Map knowledge: track all revealed DZ/pending DZ/safe regions after using Map
 _map_knowledge: dict = {"revealed": False, "death_zones": set(), "safe_center": []}
@@ -273,7 +293,7 @@ def reset_game_state():
         "damage_dealt": 0, "damage_taken": 0, "finisher_kills": 0, "ranged_attacks": 0,
         "chase_attempts": 0, "combat_avoided": 0, "enemies_seen": 0, "turns_alive": 0,
     }
-    log.info("Strategy brain reset for new game")
+    log.info("🔄 Strategy brain reset for new game")
 
 
 def _log_combat_metrics():
@@ -284,14 +304,14 @@ def _log_combat_metrics():
     kills = m["kills"]
     success_rate = (m["attacks_successful"] / attacks * 100) if attacks > 0 else 0
     log.info("=" * 50)
-    log.info(" COMBAT METRICS REPORT")
+    log.info("📊 COMBAT METRICS REPORT")
     log.info("=" * 50)
-    log.info("Attacks Attempted: %d | Successful: %d (%.1f%%)", attacks, m["attacks_successful"], success_rate)
-    log.info("Kills: %d | Finisher Kills: %d", kills, m["finisher_kills"])
-    log.info("Ranged Attacks: %d | Chase Attempts: %d", m["ranged_attacks"], m["chase_attempts"])
-    log.info("Combat Avoided: %d | Enemies Seen: %d", m["combat_avoided"], m["enemies_seen"])
-    log.info("Damage Dealt: %d | Damage Taken: %d", m["damage_dealt"], m["damage_taken"])
-    log.info("Turns Alive: %d", m["turns_alive"])
+    log.info("⚔️ Attacks Attempted: %d | Successful: %d (%.1f%%)", attacks, m["attacks_successful"], success_rate)
+    log.info("💀 Kills: %d | Finisher Kills: %d", kills, m["finisher_kills"])
+    log.info("🏹 Ranged Attacks: %d | 🏃 Chase Attempts: %d", m["ranged_attacks"], m["chase_attempts"])
+    log.info("🛡️ Combat Avoided: %d | 👁️ Enemies Seen: %d", m["combat_avoided"], m["enemies_seen"])
+    log.info("⚔️ Damage Dealt: %d | 🩹 Damage Taken: %d", m["damage_dealt"], m["damage_taken"])
+    log.info("⏱️ Turns Alive: %d", m["turns_alive"])
     log.info("=" * 50)
 
 
@@ -423,17 +443,17 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     names_here = [i.get("typeId", i.get("name", "?")) for i in items_here]
     names_nearby = [i.get("typeId", i.get("name", "?")) for i in items_nearby]
     
-    log.info("LOOT_SCAN: total_visible=%d | HERE=%s | NEARBY=%s",
+    log.info("📦 LOOT_SCAN: total_visible=%d | HERE=%s | NEARBY=%s",
              len(visible_items), names_here, names_nearby)
     
     # Inventory summary for monitoring
     inv_heals = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS])
     inv_wpns = len([i for i in inventory if i.get("category") == "weapon" or i.get("typeId", "").lower() in WEAPONS])
     inv_maps = len([i for i in inventory if isinstance(i, dict) and i.get("typeId", "").lower() == "map"])
-    log.info("INVENTORY: HP=%d EP=%d | HealItems=%d Weapons=%d Maps=%d | WeaponEquipped=%s",
-             hp, ep, inv_heals, inv_wpns, inv_maps, equipped.get("typeId") if isinstance(equipped, dict) else equipped)
+    log.info("🎒 INVENTORY: ❤️HP=%d ⚡EP=%d | 💊HealItems=%d ⚔️Weapons=%d 🗺️Maps=%d | WeaponEquipped=%s",
+             hp, ep, inv_heals, inv_wpns, inv_maps, _format_weapon_with_icon(equipped.get("typeId", "fist") if isinstance(equipped, dict) else "fist"))
     if inv_maps > 0:
-        log.info("[MAP_TRACKING] Inventory contains %d Map(s) - should use immediately if not used yet", inv_maps)
+        log.info("🗺️ [MAP_TRACKING] Inventory contains %d Map(s) - should use immediately if not used yet", inv_maps)
     visible_regions = view.get("visibleRegions", [])
     connected_regions = view.get("connectedRegions", [])
     pending_dz = view.get("pendingDeathzones", [])
@@ -514,7 +534,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     finisher_targets = [e for e in enemies if e.get("hp", 100) < finisher_threshold]
 
     # Log enemy scan for debugging — critical to trace why attack isn't firing
-    log.info("ENEMY_SCAN: total_visible=%d | here=%d | in_range=%d | finishers=%d | ready_for_war=%s | w_type=%s",
+    log.info("🔍 ENEMY_SCAN: total_visible=%d | here=%d | in_range=%d | finishers=%d | ready_for_war=%s | w_type=%s",
              len(enemies), len(enemies_here), len(enemies_in_range), len(finisher_targets),
              is_ready_for_war, w_type or "fist")
 
@@ -551,11 +571,11 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if hp <= 10:  # CRITICAL: HP <= 10 = immediate heal regardless of situation
         heal = _find_healing_item(inventory, critical=True)
         if heal:
-            log.critical("💀 CRITICAL_HEAL: HP=%d critically low - IMMEDIATE HEAL!", hp)
+            log.critical("🩹 CRITICAL_HEAL: HP=%d critically low - IMMEDIATE HEAL!", hp)
             return {"action": "use_item", "data": {"itemId": heal["id"]},
                     "reason": f"CRITICAL HEAL: HP={hp} - SURVIVAL PRIORITY!"}
         else:
-            log.critical("💀 CRITICAL_DANGER: HP=%d but NO HEALS available!", hp)
+            log.critical("⚠️ CRITICAL_DANGER: HP=%d but NO HEALS available!", hp)
 
     # EMERGENCY COMBAT CHECK: Check if we're under attack even during cooldown
     recent_damage = getattr(decide_action, '_recent_damage_taken', 0)
@@ -570,7 +590,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             if hp < 40:
                 heal = _find_healing_item(inventory, critical=True)
                 if heal:
-                    log.warning("💊 EMERGENCY_HEAL: Critical HP=%d, using heal during attack!", hp)
+                    log.warning("🩹 EMERGENCY_HEAL: Critical HP=%d, using heal during attack!", hp)
                     return {"action": "use_item", "data": {"itemId": heal["id"]},
                             "reason": f"EMERGENCY HEAL: Critical HP ({hp}) under attack"}
             
@@ -584,15 +604,15 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                             "data": {"targetId": target["id"], "targetType": "agent"},
                             "reason": f"EMERGENCY ATTACK: Counter {target.get('name','?')} under attack"}
         
-        log.info("COOLDOWN_WAIT: Waiting for cooldown to expire (canAct=False)")
+        log.info("⏸️ COOLDOWN_WAIT: Waiting for cooldown to expire (canAct=False)")
         return None  # Wait for cooldown
 
     # Log current region state for debugging
     fac_types = [f.get("type",f.get("typeId","?")) for f in interactables if isinstance(f, dict)]
     enemies_here_names = [e.get("name", e.get("id","?")[:8]) for e in enemies_here]
-    log.info("COMBAT_GATE: hp=%d floor=%d phase_floor=%d can_afford=%s",
+    log.info("⚔️ COMBAT_GATE: hp=%d floor=%d phase_floor=%d can_afford=%s",
              hp, combat_hp_floor, phase_floor, can_afford_combat)
-    log.info("REGION_STATE: %s (%s) | terrain=%s | weather=%s | interactables=%s | enemies_here=%s",
+    log.info("🗺️ REGION_STATE: %s (%s) | terrain=%s | weather=%s | interactables=%s | enemies_here=%s",
              region.get("name", "Unknown"),
              region_id[:8] if len(str(region_id)) > 8 else region_id,
              region_terrain, region_weather, fac_types, enemies_here_names)
@@ -693,7 +713,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             # DECISION: Fight if armed and healthy, flee if weak
             if can_fight_clan and dominant_count <= 5:  # Fight smaller clans
                 log.info("⚔️ CLAN_FIGHT: Armed with %s, HP=%d - engaging clan party '%s_' x%d!", 
-                         equipped.get("typeId", "weapon"), hp, dominant_clan, dominant_count)
+                         _format_weapon_with_icon(equipped.get("typeId", "weapon")), hp, dominant_clan, dominant_count)
                 suspected_party = False  # Don't flee - fight!
                 reason = f"CLAN FIGHT: Armed engagement with '{dominant_clan}_' x{dominant_count}"
             else:
@@ -703,8 +723,8 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 else:
                     reason = f"CLAN FLEE: Clan too large '{dominant_clan}_' x{dominant_count}"
         else:
-            log.info("👥 Clan party '%s_' x%d detected but manageable (HP=%d, Weapon=%s)", 
-                    dominant_clan or "unknown", dominant_count, hp, equipped.get("typeId", "none") if equipped else "none")
+            log.info("👥 Clan party '%s_' x%d detected but manageable (HP=%d, ⚔️Weapon=%s)", 
+                    dominant_clan or "unknown", dominant_count, hp, _format_weapon_with_icon(equipped.get("typeId", "fist") if equipped else "fist"))
             suspected_party = False  # Don't flee - fight or observe
         
         # Only flee if decided to flee
@@ -771,7 +791,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             if enemy_rid and enemy_rid != region_id:
                 if any(_get_region_id(c) == enemy_rid for c in connections):
                     if enemy_rid not in danger_ids:
-                        log.info("⚔️ AGGRESSIVE_CHASE: Pursuing %s to %s (HP=%d)", 
+                        log.info("🏃 AGGRESSIVE_CHASE: Pursuing %s to %s (HP=%d)", 
                                  enemy.get('name','?'), enemy_rid[:8], enemy.get('hp', '?'))
                         return {"action": "move", "data": {"regionId": enemy_rid},
                                 "reason": f"AGGRESSIVE CHASE: Hunting {enemy.get('name','?')}"}
@@ -780,7 +800,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if guardians_here and hp < GUARDIAN_FARM_MIN_HP and ep >= move_ep_cost:
         safe = _find_safe_region_with_exit(connections, danger_ids, view)
         if safe:
-            log.warning("⚠️ Guardian threat! HP=%d, fleeing", hp)
+            log.warning("👹 Guardian threat! HP=%d, fleeing", hp)
             return {"action": "move", "data": {"regionId": safe},
                     "reason": f"GUARDIAN FLEE: HP={hp}, too dangerous"}
 
@@ -804,7 +824,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if phase_strategy == "WEAPON_SEARCH":
         if enemies_here and not equipped:
             # No weapon, avoid combat at all costs
-            log.info("🔍 EARLY_GAME: No weapon - avoiding combat, searching for gear")
+            log.info("🔍 EARLY_GAME: No ⚔️weapon - avoiding combat, searching for gear")
             safe = _find_safe_region_with_exit(connections, danger_ids, view)
             if safe and ep >= move_ep_cost:
                 return {"action": "move", "data": {"regionId": safe},
@@ -813,7 +833,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             # Has weapon but still early - be very selective
             weapon_strategy = _get_weapon_strategy(equipped)
             if weapon_strategy["style"] in ["melee_defensive", "ranged_defensive"]:
-                log.info("🔍 EARLY_GAME: Defensive weapon - avoiding combat")
+                log.info("🔍 EARLY_GAME: Defensive ⚔️weapon - avoiding combat")
                 safe = _find_safe_region_with_exit(connections, danger_ids, view)
                 if safe and ep >= move_ep_cost:
                     return {"action": "move", "data": {"regionId": safe},
@@ -850,7 +870,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if not equipped:
         equip_action = _check_equip(inventory, equipped)
         if equip_action:
-            log.info("⚔️ COMBAT_PREP: Auto-equipping weapon - always be combat ready!")
+            log.info("⚔️ COMBAT_PREP: Auto-equipping ⚔️weapon - always be combat ready!")
             return equip_action
 
     # ── Priority 5b: DEFENSE PREPARATION (Weapon priority when under threat!) ─────────
@@ -906,12 +926,12 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             enemy_hp = weakest.get("hp", "?")
             enemy_ep = weakest.get("ep", "?")
             
-            log.info("🏹 SNIPER_KILL: Targeting %s (HP=%s EP=%s Weapon=%s) - SNIPER DOMINANCE!",
+            log.info("🏹 SNIPER_KILL: Targeting %s (HP=%s EP=%s Weapon=%s) - 🔫SNIPER DOMINANCE!",
                      weakest.get("name", "?"), enemy_hp, enemy_ep, enemy_weapon)
             _track_attack(attack_type="ranged")
             return {"action": "attack",
                     "data": {"targetId": weakest["id"], "targetType": "agent"},
-                    "reason": f"SNIPER_KILL: {weakest.get('name','?')} (HP={enemy_hp} EP={enemy_ep} W={enemy_weapon}) - Sniper range advantage!"}
+                    "reason": f"🔫SNIPER_KILL: {weakest.get('name','?')} (HP={enemy_hp} EP={enemy_ep} W={enemy_weapon}) - Sniper range advantage!"}
     
     # Non-sniper ranged combat (normal rules apply)
     elif enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and weather_ok:
@@ -951,7 +971,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         heal = _find_healing_item(inventory, critical=True)
         if heal:
             return {"action": "use_item", "data": {"itemId": heal["id"]},
-                    "reason": f"CRITICAL HEAL: HP={hp}<{HP_CRITICAL_THRESHOLD}, using {heal.get('typeId', 'heal')}"}
+                    "reason": f"🩹 CRITICAL HEAL: HP={hp}<{HP_CRITICAL_THRESHOLD}, using {heal.get('typeId', 'heal')}"}
         
         # EMERGENCY FLEE: If no healing items and HP is very low, RUN AWAY!
         if hp < 25 and connections and enemies_here:
@@ -964,7 +984,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         best_escape = c
                         break
                 rid = _get_region_id(best_escape)
-                log.warning("🚨 EMERGENCY FLEE: HP=%d and NO HEALS! Running to %s", hp, rid[:8])
+                log.warning("🏃 EMERGENCY FLEE: HP=%d and NO HEALS! Running to %s", hp, rid[:8])
                 _track_chase()
                 return {"action": "move", "data": {"regionId": rid},
                         "reason": f"ESCAPE: Low HP ({hp}) and no healing items!"}
@@ -1317,7 +1337,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                             "reason": f"GUARDIAN FARM: HP={target['agent'].get('hp','?')} "
                                       f"(120 sMoltz! dmg={target['my_dmg']} vs {target['enemy_dmg']})"}
     elif guardians:
-        log.info("GUARDIAN_SKIP: hp=%d weapon_ok=%s heal_ok=%s nearby_players=%d weather_ok=%s",
+        log.info("👹 GUARDIAN_SKIP: hp=%d weapon_ok=%s heal_ok=%s nearby_players=%d weather_ok=%s",
                  hp, guardian_weapon_ok, guardian_heal_ok, nearby_players, guardian_weather_ok)
 
     # ── Priority 7: Monster farming (only when EP is abundant) ────
@@ -1445,7 +1465,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         # WEATHER DELAY: avoid unnecessary movement in storm
         weather_delay = (region_weather == "storm" and not has_targets and ep < 6)
         if weather_delay:
-            log.info("WEATHER_DELAY: Storm + no targets + low EP. Waiting for clear weather.")
+            log.info("🌩️ WEATHER_DELAY: Storm + no targets + low EP. Waiting for clear weather.")
             return None  # Skip movement, rest instead
     weather_delay = (region_weather == "storm" and not has_targets and ep < 6)
     if weather_delay:
@@ -1514,7 +1534,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # Only increment idle counter if truly no movement possible
     if not has_targets and ep < move_ep_cost:
         _consecutive_idle_turns += 1
-        log.info("IDLE_FORCED: EP too low for movement (%d < %d), idle turn %d", 
+        log.info("🏃 IDLE_FORCED: EP too low for movement (%d < %d), idle turn %d", 
                  ep, move_ep_cost, _consecutive_idle_turns)
     else:
         _consecutive_idle_turns = 0
@@ -1525,7 +1545,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # Also rest if weather is storm and no urgent targets
     if (ep < 4 or weather_delay) and not enemies_here and not region.get("isDeathZone") and region_id not in danger_ids:
         return {"action": "rest", "data": {},
-                "reason": f"REST: EP={ep}/{max_ep}, area is safe (+1 bonus EP)"}
+                "reason": f"⏸️ REST: EP={ep}/{max_ep}, area is safe (+1 bonus EP)"}
 
     return None  # Wait for next turn
 
@@ -1810,10 +1830,10 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
             log.info("SMART_INVENTORY: Found better item %s > %s, but no drop action available", 
                     item_to_pickup.get("typeId", "item"), item_to_drop.get("typeId", "item"))
             # Since game doesn't have drop action, we'll skip pickup and wait for natural turnover
-            log.info("PICKUP: Inventory full (%d/10) — waiting for natural turnover", len(inventory))
+            log.info("📦 PICKUP: Inventory full (%d/10) — waiting for natural turnover", len(inventory))
             return None
         else:
-            log.info("PICKUP: Inventory full (%d/10) — no valuable replacements", len(inventory))
+            log.info("📦 PICKUP: Inventory full (%d/10) — no valuable replacements", len(inventory))
             return None
 
     # Sort by priority — Moltz always first
@@ -1823,7 +1843,7 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
     score = _pickup_score(best, inventory, heal_count)
     if score > 0:
         type_id = best.get('typeId', 'item')
-        log.info("PICKUP: %s (score=%d, heal_stock=%d)", type_id, score, heal_count)
+        log.info("🎒 PICKUP: %s (score=%d, heal_stock=%d)", type_id, score, heal_count)
         return {"action": "pickup", "data": {"itemId": best["id"]},
                 "reason": f"PICKUP: {type_id}"}
     return None
@@ -2050,7 +2070,7 @@ def _check_equip(inventory: list, equipped) -> dict | None:
     if best:
         best_weapon = best.get("typeId", "weapon")
         best_range = WEAPONS.get(best_weapon, {}).get("range", 0)
-        log.info("EQUIP: Switching from %s (+%d, range=%d) to %s (+%d, range=%d) - value: %d > %d",
+        log.info("🎒 EQUIP: Switching from %s (+%d, range=%d) to %s (+%d, range=%d) - value: %d > %d",
                  current_weapon, current_bonus, current_range,
                  best_weapon, best_bonus, best_range,
                  best_value, current_value)
@@ -2132,7 +2152,7 @@ def _moderate_heal_in_safe_area(hp: int, inventory: list, healing_count: int, en
     heal = _find_healing_item(inventory, critical=False)
     if heal:
         return {"action": "use_item", "data": {"itemId": heal["id"]},
-                "reason": f"MODERATE HEAL: HP={hp}<{HP_MODERATE_THRESHOLD}, safe area, using {heal.get('typeId', 'heal')}"}
+                "reason": f"💊 MODERATE HEAL: HP={hp}<{HP_MODERATE_THRESHOLD}, safe area, using {heal.get('typeId', 'heal')}"}
     return None
 
 
@@ -2440,7 +2460,7 @@ def _calculate_guardian_route_bonus(region_id: str, my_hp: int, has_weapon: bool
     else:
         # No weapon = reduced guardian hunting priority
         bonus = max(0, bonus - 10)  # Reduce bonus significantly
-        log.info("⚠️ GUARDIAN_NO_WEAPON: %s - no weapon, reduced priority", region_id[:8])
+        log.info("⚠️ GUARDIAN_NO_WEAPON: %s - no ⚔️weapon, reduced priority", region_id[:8])
     
     if healing_count >= 2:
         bonus += 3  # Healing bonus for sustained hunting
@@ -2507,7 +2527,7 @@ def _use_utility_item(inventory: list, hp: int, ep: int, alive_count: int) -> di
         # Energy Drink: use if EP is low
         if type_id == "energy_drink" and ep <= 5:
             return {"action": "use_item", "data": {"itemId": item_id},
-                    "reason": "UTILITY: Using Energy Drink (+5 EP)"}
+                    "reason": "⚡ UTILITY: Using Energy Drink (+5 EP)"}
                     
         # Megaphone: use if we want to broadcast (low priority)
         # if type_id == "megaphone": ...
@@ -2798,7 +2818,7 @@ def _choose_move_target(connections, danger_ids: set,
                 score += guardian_distance_bonus
                 
                 if guardian_distance_bonus > 0:
-                    log.info("🛡️ GUARDIAN_HUNT: %s route bonus +%d (HP=%d, Weapon=%s, Heals=%d)", 
+                    log.info("🛡️ GUARDIAN_HUNT: %s route bonus +%d (HP=%d, ⚔️Weapon=%s, Heals=%d)", 
                              rid[:8], guardian_distance_bonus, my_hp, has_weapon, healing_count)
             
             # IMPROVED: Late game center vs edge strategy

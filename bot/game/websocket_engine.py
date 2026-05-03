@@ -202,7 +202,7 @@ class WebSocketEngine:
         """
         self.ws = ws
         retry_count = 0  # Reset on successful connect
-        log.info("[OK] WebSocket connected for game=%s", self.game_id)
+        log.info("✅ [OK] WebSocket connected for game=%s", self.game_id)
 
         # Start ping keepalive
         self._ping_task = asyncio.create_task(self._ping_loop())
@@ -497,7 +497,7 @@ class WebSocketEngine:
         alive_count = view.get("aliveCount", "?")
 
         if not self_data.get("isAlive", True):
-            log.info("[DEAD] Agent DEAD — Alive remaining: %s. Waiting for game_ended...", alive_count)
+            log.info("💀 [DEAD] Agent DEAD — Alive remaining: %s. Waiting for game_ended...", alive_count)
             
             # NEW: Track death analytics
             region = view.get("currentRegion", {})
